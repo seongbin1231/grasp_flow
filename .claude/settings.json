@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/robotics/anaconda3/bin/python scripts/visualize_icp_2d_v3.py)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/batch_icp_v3.py)",
+      "WebSearch",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/visualize_icp_with_grasps.py)",
+      "Bash(/home/robotics/anaconda3/bin/python -c \"import plotly; print\\('plotly', plotly.__version__\\)\")",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/visualize_grasps_3d.py)",
+      "Edit(/.claude/skills/top-down-grasp-synthesis/**)",
+      "Edit(/.claude/skills/hdf5-dataset-management/**)",
+      "Edit(/.claude/skills/depth-uv-grasp-training/**)",
+      "Edit(/.claude/skills/onnx-matlab-integration/**)",
+      "Edit(/.claude/skills/yolo-grasp-orchestrator/**)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/visualize_scene_pipeline.py)",
+      "Bash(/home/robotics/anaconda3/bin/python -c ' *)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/batch_grasp_synthesis.py)",
+      "Bash(python3)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/build_grasp_v2.py)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 1 --smoke 30 --batch_size 8 --workers 2 --run runs/yolograsp_v2/smoke)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 2 --smoke 200 --batch_size 16 --workers 4 --run runs/yolograsp_v2/smoke2)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 3 --smoke 200 --batch_size 16 --workers 4 --block film --seed 42 --run runs/yolograsp_v2/cmp_film)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 3 --smoke 200 --batch_size 16 --workers 4 --block adaln_zero --seed 42 --run runs/yolograsp_v2/cmp_adaln)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 3 --smoke 200 --batch_size 16 --workers 4 --block adaln_zero --seed 42 --run runs/yolograsp_v2/cmp_adaln_fair)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/test_yaw_aug.py)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/visualize_augmentation.py)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/visualize_augmentation_3d.py)",
+      "Bash(/home/robotics/anaconda3/bin/python -c \"import wandb; print\\('wandb', wandb.__version__\\)\")",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 3 --smoke 200 --batch_size 16 --workers 4 --block adaln_zero --seed 42 --run runs/yolograsp_v2/postfix_smoke)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/demo_inference.py)",
+      "Bash(wait)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 1 --smoke 20 --batch_size 16 --workers 2 --symmetry_loss --rot_loss_weight 2.0 --block adaln_zero --lr 1e-3 --n_blocks 8 --run runs/yolograsp_v2/smoke_tier2)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 1 --smoke 15 --batch_size 16 --workers 2 --symmetry_loss --rot_loss_weight 2.0 --block adaln_zero --lr 1e-3 --n_blocks 8 --ema_decay 0.9995 --run runs/yolograsp_v2/smoke_tier2_fix)",
+      "Bash(/home/robotics/anaconda3/bin/python /home/robotics/Competition/YOLO_Grasp/scripts/demo_inference.py)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/train_flow.py --epochs 1 --smoke 15 --batch_size 16 --workers 2 --symmetry_loss --rot_loss_weight 2.0 --block adaln_zero --lr 1e-3 --n_blocks 8 --ema_decay 0.9995 --marker_boost 2.5 --spam_boost 1.5 --run runs/yolograsp_v2/smoke_marker)",
+      "Bash(/home/robotics/anaconda3/bin/python -c \"from scipy.spatial import cKDTree; print\\('scipy ok'\\)\")",
+      "Bash(YGRASP_CKPT=runs/yolograsp_v2/v6_150ep/adaln_zero_lr0.001_nb8_h768/checkpoints/best.pt /home/robotics/anaconda3/bin/python scripts/demo_inference.py)",
+      "Bash(xdg-open /home/robotics/Competition/YOLO_Grasp/scripts/_infer_viz/index.html)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/export_onnx.py)"
+    ]
+  }
+}

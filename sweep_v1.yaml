@@ -1,0 +1,43 @@
+program: scripts/train_flow.py
+method: grid
+name: yolograsp_v2_sweep_v1
+description: "Flow Matching grasp model sweep — block × lr × n_blocks"
+
+metric:
+  name: val_flow_loss
+  goal: minimize
+
+parameters:
+  block:
+    values: [film, adaln_zero]
+  lr:
+    values: [0.0001, 0.0003, 0.001]
+  n_blocks:
+    values: [4, 6, 8]
+  # fixed
+  epochs:
+    value: 15
+  batch_size:
+    value: 16
+  hidden:
+    value: 512
+  cond_dropout:
+    value: 0.2
+  aux_mode_weight:
+    value: 0.1
+  ema_decay:
+    value: 0.999
+  warmup_frac:
+    value: 0.1
+  workers:
+    value: 4
+  seed:
+    value: 42
+  run:
+    value: runs/yolograsp_v2/sweep_v1
+
+command:
+  - /home/robotics/anaconda3/bin/python
+  - ${program}
+  - --wandb
+  - ${args}

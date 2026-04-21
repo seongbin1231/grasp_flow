@@ -1,0 +1,63 @@
+{
+  "schema_version": "v6_150ep",
+  "source_ckpt": "runs/yolograsp_v2/v6_150ep/adaln_zero_lr0.001_nb8_h768/checkpoints/best.pt",
+  "epoch": 118,
+  "val_loss": 0.36400558536678,
+  "image": {
+    "H": 720,
+    "W": 1280,
+    "camera_K": {
+      "fx": 1109.0,
+      "fy": 1109.0,
+      "cx": 640.0,
+      "cy": 360.0
+    }
+  },
+  "depth": {
+    "unit_in": "meter (float32)",
+    "clip_min": 0.3,
+    "clip_max": 1.5,
+    "scale_div": 1.5
+  },
+  "normalize_pos": true,
+  "pos_mean": [
+    0.024448979645967484,
+    -0.005567771382629871,
+    0.563636302947998
+  ],
+  "pos_std": [
+    0.11082900315523148,
+    0.07186798751354218,
+    0.09951706230640411
+  ],
+  "noise_temp_train": 1.0,
+  "recommended_inference": {
+    "N_samples": 32,
+    "T_euler_steps": 32,
+    "noise_temp": 0.8,
+    "cfg_guidance": 2.0
+  },
+  "grasp_param_8d": [
+    "x",
+    "y",
+    "z",
+    "approach_x",
+    "approach_y",
+    "approach_z",
+    "sin_yaw",
+    "cos_yaw"
+  ],
+  "gripper": {
+    "GRIPPER_HALF": 0.0425,
+    "FINGER_LEN": 0.04,
+    "PALM_BACK": 0.025,
+    "APPROACH_STEM": 0.05,
+    "TCP_to_flange_offset_z_tool": 0.14
+  },
+  "filter": {
+    "BODY_MARGIN_m": 0.005,
+    "TIP_SWEEP_RADIUS_m": 0.015,
+    "STEM_SAMPLES": 4,
+    "SWEEP_SAMPLES": 6
+  }
+}

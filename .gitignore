@@ -1,0 +1,72 @@
+# ------------------------------------------------------------
+# YOLO_Grasp .gitignore
+# 목적: 텍스트/코드/문서만 추적. 대용량 모델·데이터·캐시 제외.
+# ------------------------------------------------------------
+
+# --- Python bytecode ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# --- Environments ---
+.venv/
+venv/
+env/
+.env
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb
+
+# --- Model weights (학습 재현은 scripts/train_flow.py 로) ---
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+
+# --- Training runs (9GB+, v6_150ep 만 재현하면 됨) ---
+runs/
+
+# --- HDF5 datasets / caches ---
+*.h5
+*.hdf5
+datasets/
+img_dataset/
+dataset/
+dataset_v2/
+
+# --- wandb local logs (클라우드에도 있음) ---
+wandb/
+mlruns/
+
+# --- 개발 중 viz 산출물 (deploy/viz/ 로 이관됨) ---
+scripts/_*_viz/
+scripts/_*_test_out*/
+scripts/_icp_compare_*/
+
+# --- Deploy 바이너리 (README/meta.json 만 추적) ---
+deploy/onnx/*.onnx
+deploy/yolo/*.onnx
+deploy/yolo/*.pt
+deploy/viz/*.html
+deploy/viz/live/*.html
+deploy/viz/gt/*.html
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# --- IDE ---
+.vscode/
+.idea/
+
+# --- Temp / logs ---
+*.log
+*.tmp
+.cache/
