@@ -11,6 +11,7 @@
 # Stage 3: 구 YOLO cache + dataset (v1/v2)                 ~100 MB
 # Stage 4: 개발 중 viz/test 산출물 (scripts/_*)             ~73 MB
 # Stage 5: __pycache__ + 기타 부스러기                      ~2 MB
+# Stage 6: 구버전 코드 (파이프라인 미사용 21개)              ~230 KB
 # =========================================================================
 
 ROOT="/home/robotics/Competition/YOLO_Grasp"
@@ -111,6 +112,35 @@ run_stage 5 "__pycache__ + wandb + 개별 run 아티팩트" \
   "$ROOT/runs/detection_viz" \
   "$ROOT/runs/detection_viz_v3" \
   "$ROOT/runs/detection_viz_v3_fixed"
+
+# ================ Stage 6 ================
+# 구버전 코드 — 현재 파이프라인에서 사용되지 않음.
+# 각 파일의 삭제 이유는 scripts/cleanup.sh 주석 참고 (git log 에도 기록).
+run_stage 6 "구버전 코드 (파이프라인 미사용)" \
+  "$ROOT/train.py" \
+  "$ROOT/test.py" \
+  "$ROOT/test_center.py" \
+  "$ROOT/split_dataset.py" \
+  "$ROOT/sweep_v1.yaml" \
+  "$ROOT/scripts/batch_yolo_cache.py" \
+  "$ROOT/scripts/batch_yolo_cache_v2.py" \
+  "$ROOT/scripts/sweep_v1.py" \
+  "$ROOT/scripts/diagnose_preprocessing.py" \
+  "$ROOT/scripts/preview_uv_strategies.py" \
+  "$ROOT/scripts/test_icp_small.py" \
+  "$ROOT/scripts/test_icp_v2.py" \
+  "$ROOT/scripts/test_icp_v3.py" \
+  "$ROOT/scripts/test_yaw_aug.py" \
+  "$ROOT/scripts/visualize_augmentation.py" \
+  "$ROOT/scripts/visualize_augmentation_3d.py" \
+  "$ROOT/scripts/visualize_detections.py" \
+  "$ROOT/scripts/visualize_grasps_3d.py" \
+  "$ROOT/scripts/visualize_icp_2d.py" \
+  "$ROOT/scripts/visualize_icp_2d_v3.py" \
+  "$ROOT/scripts/visualize_icp_overlay.py" \
+  "$ROOT/scripts/visualize_icp_with_grasps.py" \
+  "$ROOT/scripts/visualize_masked_pointcloud.py" \
+  "$ROOT/scripts/visualize_scene_pipeline.py"
 
 # ================ 요약 ================
 echo
