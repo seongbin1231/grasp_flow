@@ -91,6 +91,11 @@ def main():
                 # object_ref 는 split 내 global counter (같은 obj grasp 묶기용)
                 for oname in sorted(g_sid.keys(), key=lambda x: int(x.split("_")[1])):
                     g_obj = g_sid[oname]
+                    # 정책 제외된 object 는 grasps_cam 등이 없음 → skip
+                    if "excluded_reason" in g_obj.attrs:
+                        continue
+                    if int(g_obj.attrs.get("n_grasps", 0)) == 0:
+                        continue
                     raw_cls = int(g_obj.attrs["class_id"])
                     uni_cls, uni_name = UNIFY_MAP[raw_cls]
                     mode = str(g_obj.attrs["mode"])
@@ -159,8 +164,8 @@ def main():
         str_dt = h5py.string_dtype()
         md.attrs.create("class_names", UNIFIED_NAMES, dtype=str_dt)
         md.attrs.create("mode_names", ["lying", "standing", "cube"], dtype=str_dt)
-        md.attrs.create("group_names", ["top-down", "side-cap", "lying", "cube"],
-                         dtype=str_dt)
+        md.attrs.create("group_names", ["top-down", "side-cap", "lying",
+                                         "cube", "side-45"], dtype=str_dt)
         md.attrs["depth_clip_min"] = 0.3
         md.attrs["depth_clip_max"] = 1.5
         md.attrs["depth_scale_div"] = 1.5
@@ -209,15 +214,15 @@ def main():
             # split stats
             cls_bins = np.bincount(obj_cls, minlength=len(UNIFIED_NAMES)).tolist()
             mode_bins = np.bincount(obj_mode, minlength=3).tolist()
-            group_bins = np.bincount(grasp_group, minlength=4).tolist()
+            group_bins = np.bincount(grasp_group, minlength=5).tolist()
             stats["splits"][split] = {
                 "rows": int(N),
                 "unique_depths": int(depths.shape[0]),
                 "unique_objects": int(object_ref.max() + 1),
                 "class_dist": dict(zip(UNIFIED_NAMES, cls_bins)),
                 "mode_dist": dict(zip(["lying", "standing", "cube"], mode_bins)),
-                "group_dist": dict(zip(["top-down", "side-cap", "lying", "cube"],
-                                       group_bins)),
+                "group_dist": dict(zip(["top-down", "side-cap", "lying",
+                                         "cube", "side-45"], group_bins)),
                 "fitness_mean": float(fitness.mean()),
                 "fitness_p10": float(np.percentile(fitness, 10)),
                 "fitness_p90": float(np.percentile(fitness, 90)),

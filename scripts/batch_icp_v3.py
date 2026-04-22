@@ -30,11 +30,23 @@ K_FX = K_FY = 1109.0
 K_CX, K_CY = 640.0, 360.0
 IMG_W, IMG_H = 1280, 720
 
-BBOX_MARGIN_PX = 20
 CONF_THRESHOLD = 0.5
 MIN_SCENE_POINTS = 100
-FITNESS_GATE = 0.02
-RMSE_GATE_M = 0.005
+FITNESS_GATE = 0.30
+RMSE_GATE_M = 0.003
+
+# class별 YOLO mask 픽셀 하위 10% threshold — 기존 YOLO cache v3 에서 계산됨.
+# bbox_margin=20px (31% drop) 대체. 화면 가장자리여도 mask 가 충분히 크면 ICP 진행.
+MASK_PX_P10 = {
+    "bottle": 7878,
+    "can": 11114,
+    "cube_blue": 3623,
+    "cube_green": 3631,
+    "cube_p": 5903,
+    "cube_red": 5038,
+    "marker": 1599,
+    "spam": 3517,
+}
 
 VOXELS = (0.012, 0.006, 0.003)
 DISTS = (0.048, 0.020, 0.005)
@@ -63,12 +75,6 @@ def poly_to_mask(poly: np.ndarray) -> np.ndarray:
     m = np.zeros((IMG_H, IMG_W), dtype=np.uint8)
     cv2.fillPoly(m, [np.round(poly).astype(np.int32).reshape(-1, 1, 2)], 1)
     return m.astype(bool)
-
-
-def bbox_inside(bbox: np.ndarray, margin: int) -> bool:
-    x1, y1, x2, y2 = bbox
-    return (x1 >= margin and y1 >= margin
-            and x2 <= IMG_W - margin and y2 <= IMG_H - margin)
 
 
 def depth_mask_to_pc(depth_m: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -244,7 +250,7 @@ def run():
         "samples_zero_det": 0,
         "objects_attempted": 0,
         "objects_skipped_low_conf": 0,
-        "objects_skipped_border": 0,
+        "objects_skipped_mask_px": 0,
         "objects_skipped_poly": 0,
         "objects_skipped_scene_pts": 0,
         "objects_skipped_no_ply": 0,
@@ -274,10 +280,12 @@ def run():
         dst.attrs["icp_voxels"] = np.array(VOXELS, dtype=np.float32)
         dst.attrs["icp_dists"] = np.array(DISTS, dtype=np.float32)
         dst.attrs["icp_iters"] = np.array(ITERS, dtype=np.int32)
-        dst.attrs["bbox_margin_px"] = BBOX_MARGIN_PX
         dst.attrs["conf_threshold"] = CONF_THRESHOLD
         dst.attrs["fitness_gate"] = FITNESS_GATE
         dst.attrs["rmse_gate_m"] = RMSE_GATE_M
+        dst.attrs["mask_px_p10_classes"] = list(MASK_PX_P10.keys())
+        dst.attrs["mask_px_p10_values"] = np.array(
+            list(MASK_PX_P10.values()), dtype=np.int32)
 
         sids = list(src.keys())
         n_total = len(sids)
@@ -332,10 +340,6 @@ def run():
                     g_obj.attrs["skipped_reason"] = "low_conf"
                     stats["objects_skipped_low_conf"] += 1
                     continue
-                if not bbox_inside(bbox, BBOX_MARGIN_PX):
-                    g_obj.attrs["skipped_reason"] = "bbox_on_border"
-                    stats["objects_skipped_border"] += 1
-                    continue
                 poly = np.asarray(poly_ds[k]).reshape(-1, 2)
                 if poly.size < 6:
                     g_obj.attrs["skipped_reason"] = "empty_poly"
@@ -351,6 +355,15 @@ def run():
 
                 try:
                     mask = poly_to_mask(poly)
+                    mask_px = int(mask.sum())
+                    g_obj.create_dataset("mask_px",
+                                         data=np.int32(mask_px))
+                    p10_thresh = MASK_PX_P10.get(cls_name, 0)
+                    if mask_px < p10_thresh:
+                        g_obj.attrs["skipped_reason"] = "mask_px_below_p10"
+                        g_obj.attrs["mask_px_p10_threshold"] = p10_thresh
+                        stats["objects_skipped_mask_px"] += 1
+                        continue
                     scene_pts = depth_mask_to_pc(depth_m, mask)
                     if len(scene_pts) < MIN_SCENE_POINTS:
                         g_obj.attrs["skipped_reason"] = "too_few_scene_pts"
@@ -443,7 +456,7 @@ def run():
     print(f"objects: attempted={stats['objects_attempted']}  "
           f"aligned={stats['objects_aligned']}  "
           f"passed_gate={stats['objects_pass_gate']}")
-    print(f"skipped: border={stats['objects_skipped_border']}  "
+    print(f"skipped: mask_px={stats['objects_skipped_mask_px']}  "
           f"low_conf={stats['objects_skipped_low_conf']}  "
           f"poly={stats['objects_skipped_poly']}  "
           f"scene_pts={stats['objects_skipped_scene_pts']}  "

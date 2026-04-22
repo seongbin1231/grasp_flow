@@ -55,6 +55,20 @@ deploy/viz/*.html
 deploy/viz/live/*.html
 deploy/viz/gt/*.html
 
+# --- Deploy v2 (v7_v4policy) 바이너리 — 동일 규칙 ---
+deploy2/onnx/*.onnx
+deploy2/yolo/*.onnx
+deploy2/yolo/*.pt
+deploy2/viz/*.html
+deploy2/viz/live/*.html
+deploy2/viz/gt/*.html
+deploy2/viz/gt_policy/*.html
+deploy2/viz/icp/*.html
+
+# --- 새로 추가된 gt_policy / icp viz (deploy/) ---
+deploy/viz/gt_policy/*.html
+deploy/viz/icp/*.html
+
 # --- OS junk ---
 .DS_Store
 Thumbs.db
