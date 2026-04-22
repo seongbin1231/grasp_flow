@@ -22,14 +22,24 @@ Top-view Depth + YOLO (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx,qy
 | Cube 클래스 | 하류(ICP·grasp·학습)에서 `cube_blue/green/p/red` 4종을 `cube` 1종으로 통합 |
 | Grasp 표현 | **6-DoF SE(3) 7D `[x,y,z, qw,qx,qy,qz]`** (4-DoF `[x,y,z,yaw]` 폐기, 2026-04-19) |
 
-## Grasp 정책 (2026-04-19 확정)
+## Grasp 정책 v4 (2026-04-22 최종, 6dof-v4)
 
 | 모드 | 클래스 | 구성 | grasp 수 |
 |---|---|---|---|
-| standing | bottle/can/marker/spam | top-down 8 yaw + side-horizontal 8 방위 (approach ⊥ cam Z, 정확히 90°) | **16** |
-| lying | bottle/can | 긴축 N=4 × 180° 대칭 | 8 |
-| lying | marker/spam | N=3 × 180° 대칭 | 6 |
+| standing | bottle/can | **3-layer tilt**: top-down 8 yaw (θ=0°) + **side-45° 8 azimuth** + side-cap 8 azimuth (θ=90°) | **24** |
+| lying | bottle/can | N=4 위치 × **tilt {−30°, 0°, +30°}** × 180° 대칭 | **24** |
+| lying | marker/spam | N=3 위치 × **tilt {−15°, 0°, +15°}** × 180° 대칭 | **18** |
 | cube | cube_* (4종) | R_icp edge column 정렬 2 yaw (대각선 금지) | 2 |
+
+**정책 제외** (grasp 0개 생성):
+- `marker_standing`: 7 obj (물리적으로 서있지 않음)
+- `spam_standing`: 4 obj (동일)
+- `spam_cap_not_up`: 149 obj (spam lying 중 라벨/뚜껑 면이 측면 → medium 축이 카메라 Z 와 정렬 안 됨. threshold 0.7)
+
+**핵심 구현 디테일**:
+- Lying tilt: long 축 주위 Rodrigues 회전, TCP = `p_center − app·short_r` (원통 곡면 추종)
+- Standing side-45: TCP 선형 보간 `0.5·p_cap_top + 0.5·p_cap_side`, yaw 는 `Tool Y ⊥ cap 축` 이 되도록 역산
+- grasp_group id: top-down=0, side-cap=1, lying=2, cube=3, **side-45=4** (v4 추가)
 
 ## 모델 아키텍처
 
@@ -67,3 +77,9 @@ Top-view Depth + YOLO (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx,qy
 | 2026-04-21 | **deploy/yolo/ 신설** (MATLAB 팀용 YOLO ONNX 1280) | `deploy/yolo/yolov8m_seg_1280.onnx` | ultralytics export, opset=12, simplify=True. 팀 기존 weights/best.onnx(imgsz=640) 과 **같은 best.pt** 지만 imgsz 1280 유지로 Flow 훈련 uv 일관성 보장 |
 | 2026-04-21 | GT grasp 시각화 (val scene random6) | scripts/demo_gt.py → deploy/viz/gt/ | 정책 검증용. uv 매칭 버그(grasp_v2 object_ref 는 split 전역 번호) 수정 필요했음 — 추후 dataset 호출 시 uv≈target으로 매칭 |
 | 2026-04-21 | **marker diagnosis 확정** | — (분석) | marker 훈련 실제 10.6% (1450/13640) + boost 4× = 42% 유효 비중. 수량 부족 아님. **원인: 물리 얇음(∅10mm) → 192×192 local crop 98%가 배경 → condition signal 약함**. 권장 MATLAB fallback: kept=0 시 YOLO uv 3D + top-down 강제 |
+| 2026-04-22 | **ICP 필터 업그레이드** (Phase 5) | scripts/batch_icp_v3.py | `bbox_margin=20px` (31% drop) → **mask_px per-class p10** (10.1% drop). fitness gate 0.02 → **0.30**, rmse gate 5mm → **3mm**. stable 2,238 → **2,485 (+11%)**. PLY 파일 git 에서 복구 필요했음 |
+| 2026-04-22 | **Grasp 정책 v4 확정** (Phase 6) | scripts/batch_grasp_synthesis.py + 2 viz 스크립트 | v1→v4: (1) marker/spam standing 제외, (2) spam_lying 은 medium 축(라벨 normal) 수직일 때만, (3) lying bottle/can tilt ±30°, marker/spam ±15° (Rodrigues + 곡면 추종), (4) standing 3-layer (0°/45°/90°), (5) side-45 는 Tool Y ⊥ cap 축 yaw 역산. 총 17,370 → **40,984 grasp (+136%)** |
+| 2026-04-22 | **Dataset 재빌드 v4** | scripts/build_grasp_v2.py + datasets/grasp_v2.h5 | excluded object skip, group_names 에 `side-45` 추가. train 33,744 / val 7,240 rows. policy_version `6dof-v4` |
+| 2026-04-22 | **v7_v4policy_big 학습** | runs/yolograsp_v2/v7_v4policy_big/ | hidden 1024, n_blocks 12, **35.28M params** (v6 대비 +36%). 250ep 중 **ep 226 best val_flow=0.3676** (v6 0.3640 와 동등). batch 16, lr 1e-3, marker_boost 1.5, spam_boost 2.5 |
+| 2026-04-22 | **deploy2 신규 배포** | deploy2/onnx + yolo + viz + README | v7 ONNX: encoder(2.4MB) + velocity(**139MB**) + meta.json(v4 정책 메타 포함). round-trip max\|Δ\|=5.96e-06. 인터페이스 동일 (MATLAB 팀 코드 변경 불필요). deploy/(v6) 병존 유지 (rollback 용) |
+| 2026-04-22 | **추론 검증 (random6 val scene)** | deploy2/viz/ | 7 카테고리 kept=28~32/32 (collision filter 정상). standing 에서 `kept split: topdown=X side=Y mid=Z` 확인 → **3-layer 모두 학습 성공**. lying_marker 3.9cm 오차는 알려진 약점 (물리 얇음) |
