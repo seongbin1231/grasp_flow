@@ -1,6 +1,14 @@
-# YOLO_Grasp — RoboCup ARM 2026
+# YOLO_Grasp — Pixel-Conditioned Multi-Modal 6-DoF Grasp via Flow Matching
 
-Top-view Depth + YOLO (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx,qy,qz]`를 **카메라 프레임**에서 생성하는 모델을 구축. **Conditional Rectified Flow (Flow Matching)** 기반으로 다봉 분포 샘플링 (N=32~64). ONNX velocity MLP 만 export → MATLAB `predict_grasp.m`이 Euler 1-step + 충돌 필터 + `CameraTform` 곱해 base frame pose 생성 → 기존 UR5e 파이프라인 연결.
+Depth 이미지 + 픽셀 (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx,qy,qz]`를 **카메라 프레임**에서 생성하는 모델. **Conditional Rectified Flow (Flow Matching)** 기반으로 멀티 모달 분포 샘플링 (N=32~64). ONNX velocity MLP 만 export → MATLAB `predict_grasp.m`이 Euler step + 충돌 필터 + `CameraTform` 곱해 base frame pose 생성 → UR5e 파이프라인 연결. **즉시 응용**: RoboCup ARM 2026.
+
+## 연구 발전 방향 (IEEE 급 논문 목표)
+
+**제목**: *Pixel-Conditioned Multi-Modal 6-DoF Grasp Pose Generation via Conditional Flow Matching*
+**핵심 기여 (2개)**: ① 다수 객체 scene 의 픽셀 (u,v) 컨디셔닝 타겟 파지, ② Conditional Flow Matching 으로 멀티 모달 분포 직접 학습·샘플링.
+**Future work**: VLM 어텐션 → (u,v) → grasp 의 자연어 명령 기반 end-to-end manipulation.
+**GitHub**: https://github.com/seongbin1231/grasp_flow
+**상세 계획**: 메모리 `research_paper_plan.md` 참조.
 
 ## 하네스: YOLO_Grasp Pipeline
 
@@ -83,3 +91,8 @@ Top-view Depth + YOLO (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx,qy
 | 2026-04-22 | **v7_v4policy_big 학습** | runs/yolograsp_v2/v7_v4policy_big/ | hidden 1024, n_blocks 12, **35.28M params** (v6 대비 +36%). 250ep 중 **ep 226 best val_flow=0.3676** (v6 0.3640 와 동등). batch 16, lr 1e-3, marker_boost 1.5, spam_boost 2.5 |
 | 2026-04-22 | **deploy2 신규 배포** | deploy2/onnx + yolo + viz + README | v7 ONNX: encoder(2.4MB) + velocity(**139MB**) + meta.json(v4 정책 메타 포함). round-trip max\|Δ\|=5.96e-06. 인터페이스 동일 (MATLAB 팀 코드 변경 불필요). deploy/(v6) 병존 유지 (rollback 용) |
 | 2026-04-22 | **추론 검증 (random6 val scene)** | deploy2/viz/ | 7 카테고리 kept=28~32/32 (collision filter 정상). standing 에서 `kept split: topdown=X side=Y mid=Z` 확인 → **3-layer 모두 학습 성공**. lying_marker 3.9cm 오차는 알려진 약점 (물리 얇음) |
+| 2026-04-23 | **논문 개요 작성** (교수 보고용) | 외부 산출물 | 8 섹션 (Contribution/Background/Objective/Originality/Main contents/Validation/Conclusion/Discussion). 핵심 기여 2개로 정제. Originality 는 직접 회귀 vs 샘플링-스코어링 vs Flow Matching 3분할 비교 |
+| 2026-04-23 | **논문 제목 확정** | — | *Pixel-Conditioned Multi-Modal 6-DoF Grasp Pose Generation via Conditional Flow Matching* (4 키워드 모두 포함) |
+| 2026-04-23 | **VLM 결합 future work 명시** | — | "자연어 명령 → VLM attention → (u,v) → grasp" end-to-end pipeline 확장 방향. open-vocabulary + 자연어 인터페이스 |
+| 2026-04-24 | **GitHub 리포지토리 신설 + push** | github.com/seongbin1231/grasp_flow | main 브랜치 4 커밋 push (de0d9a8 → e69f453). origin tracking 설정. 텍스트만 (.gitignore 로 바이너리 제외) |
+| 2026-04-25 | **연구 목표 IEEE 급으로 격상** | CLAUDE.md, MEMORY.md | 단순 대회 모델 → 일반화 멀티 모달 grasp 생성 framework 로 확장. 메모리에 `research_paper_plan.md` 신설하여 제목·기여·future work·인용 문헌 정리 |
