@@ -96,3 +96,7 @@ Depth 이미지 + 픽셀 (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx
 | 2026-04-23 | **VLM 결합 future work 명시** | — | "자연어 명령 → VLM attention → (u,v) → grasp" end-to-end pipeline 확장 방향. open-vocabulary + 자연어 인터페이스 |
 | 2026-04-24 | **GitHub 리포지토리 신설 + push** | github.com/seongbin1231/grasp_flow | main 브랜치 4 커밋 push (de0d9a8 → e69f453). origin tracking 설정. 텍스트만 (.gitignore 로 바이너리 제외) |
 | 2026-04-25 | **연구 목표 IEEE 급으로 격상** | CLAUDE.md, MEMORY.md | 단순 대회 모델 → 일반화 멀티 모달 grasp 생성 framework 로 확장. 메모리에 `research_paper_plan.md` 신설하여 제목·기여·future work·인용 문헌 정리 |
+| 2026-04-25 | **VLM/CLIP 기반 grasp 선행 연구 정밀 조사** | — (research) | CROG (CoRL'23), LDG-6DoF (ECCV'24), GraspVLA (2025) 등 10+ 유사 work 식별. 차별화 전략: VLM-agnostic + Depth-only + 모듈 분리 + 추론 효율성 |
+| 2026-04-26 | **Direct MLP baseline 신규 학습** (Ablation) | src/direct_model.py + scripts/train_direct.py | v7 와 동일 조건 (h=1024, n_blocks=12, 26M params, batch 16, lr 1e-3, EMA 0.9998) 의 직접 회귀 baseline. 얼리스탑 patience=30 추가. **standing val=0.420 (lying 의 7배)** → mode collapse 정량 증거 확보 |
+| 2026-04-26 | **논문 figure/table 생성 인프라** | paper_figs/, scripts/make_paper_*.py | Fig 1 (모드별 GT 합성, 3 panel), Fig 2 (모델 구조 블록도) PNG/PDF 완료. Fig 3 (Direct vs Flow 정성 비교) + Table 1 (Pos MAE/Ang Err/Mode Coverage) 스크립트는 Direct 학습 종료 후 실행 |
+| 2026-04-26 | **PLY 파일 재복구** | RoboCup_ARM/models/ply/ | git 0f8e2f7 에서 5종 (blueBottle/greenCan/cube/marker/Simsort_SPAM) 재복원. 이전 세션 후 또 삭제됨 |
