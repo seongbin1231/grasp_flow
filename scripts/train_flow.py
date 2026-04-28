@@ -68,6 +68,14 @@ def parse_args():
     ap.add_argument("--smoke", type=int, default=0,
                     help="limit batches per epoch (smoke test)")
     ap.add_argument("--seed", type=int, default=42)
+    # v8 architecture options (default OFF → v7 동작 100% 보존)
+    ap.add_argument("--xattn", action="store_true",
+                    help="[v8 A1] Enable Cross-Attention block (PixArt-α / Hunyuan-DiT 식)")
+    ap.add_argument("--multiscale_local", type=str, default="",
+                    help="[v8 A2] comma-separated crop scales e.g. '96,192,384'. "
+                         "empty = v7 single 192px")
+    ap.add_argument("--scale_dropout", type=float, default=0.0,
+                    help="[v8 A2 안전장치] prob of using only 1 random scale during training")
     return ap.parse_args()
 
 
@@ -209,9 +217,21 @@ def main():
         num_workers=args.workers, pin_memory=True,
     )
 
+    ms_scales = None
+    if args.multiscale_local:
+        ms_scales = tuple(int(s) for s in args.multiscale_local.split(","))
+        print(f"[train] [v8] multiscale local crop scales: {ms_scales}")
+    if args.xattn:
+        print(f"[train] [v8] Cross-Attention ENABLED")
+    if args.scale_dropout > 0:
+        print(f"[train] [v8] scale_dropout = {args.scale_dropout}")
+
     model = FlowGraspNet(
         cond_dropout=args.cond_dropout, block_type=args.block,
         n_blocks=args.n_blocks, hidden=args.hidden,
+        use_xattn=args.xattn,
+        multiscale_local_scales=ms_scales,
+        scale_dropout=args.scale_dropout,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[train] params: {n_params/1e6:.2f} M")

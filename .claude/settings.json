@@ -36,7 +36,27 @@
       "Bash(/home/robotics/anaconda3/bin/python -c \"from scipy.spatial import cKDTree; print\\('scipy ok'\\)\")",
       "Bash(YGRASP_CKPT=runs/yolograsp_v2/v6_150ep/adaln_zero_lr0.001_nb8_h768/checkpoints/best.pt /home/robotics/anaconda3/bin/python scripts/demo_inference.py)",
       "Bash(xdg-open /home/robotics/Competition/YOLO_Grasp/scripts/_infer_viz/index.html)",
-      "Bash(/home/robotics/anaconda3/bin/python scripts/export_onnx.py)"
+      "Bash(/home/robotics/anaconda3/bin/python scripts/export_onnx.py)",
+      "Bash(git remote *)",
+      "Bash(/home/robotics/anaconda3/bin/python -c \"import ast; ast.parse\\(open\\('/home/robotics/Competition/YOLO_Grasp/src/direct_model.py'\\).read\\(\\)\\); ast.parse\\(open\\('/home/robotics/Competition/YOLO_Grasp/scripts/train_direct.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(/home/robotics/anaconda3/bin/python -c \"import sys; sys.path.insert\\(0, '/home/robotics/Competition/YOLO_Grasp'\\); from src.direct_model import DirectGraspNet; m = DirectGraspNet\\(n_blocks=12, hidden=1024\\); n=sum\\(p.numel\\(\\) for p in m.parameters\\(\\)\\); print\\(f'DirectGraspNet params: {n/1e6:.2f}M'\\)\")",
+      "Bash(nohup /home/robotics/anaconda3/bin/python scripts/train_direct.py --run runs/yolograsp_v2/v7_direct_mlp_big --epochs 250 --batch_size 16 --lr 1e-3 --weight_decay 1e-4 --warmup_frac 0.04 --ema_decay 0.9998 --n_blocks 12 --hidden 1024 --symmetry_loss --rot_loss_weight 2.0 --marker_boost 1.5 --spam_boost 2.5 --seed 42 --wandb --wandb_project yolograsp-v2)",
+      "Bash(awk '{print $5, $7}')",
+      "Bash(pkill -INT -f \"train_direct.py\")",
+      "Bash(/home/robotics/anaconda3/bin/python -c \"import ast; ast.parse\\(open\\('/home/robotics/Competition/YOLO_Grasp/scripts/train_direct.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(nohup /home/robotics/anaconda3/bin/python scripts/train_direct.py --run runs/yolograsp_v2/v7_direct_mlp_big --epochs 250 --patience 30 --batch_size 16 --lr 1e-3 --weight_decay 1e-4 --warmup_frac 0.04 --ema_decay 0.9998 --n_blocks 12 --hidden 1024 --symmetry_loss --rot_loss_weight 2.0 --marker_boost 1.5 --spam_boost 2.5 --seed 42 --wandb --wandb_project yolograsp-v2)",
+      "Bash(/home/robotics/anaconda3/bin/python /home/robotics/Competition/YOLO_Grasp/scripts/make_paper_fig1_gt.py)",
+      "Bash(/home/robotics/anaconda3/bin/python /home/robotics/Competition/YOLO_Grasp/scripts/make_paper_fig2_arch.py)",
+      "Bash(/home/robotics/anaconda3/bin/python -c \"import ast; ast.parse\\(open\\('/home/robotics/Competition/YOLO_Grasp/scripts/make_paper_fig3_compare.py'\\).read\\(\\)\\); ast.parse\\(open\\('/home/robotics/Competition/YOLO_Grasp/scripts/make_paper_table1.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(git commit -m ' *)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/make_paper_fig1_gt.py)",
+      "Bash(ps -p 16832 -o pid,etime,stat,cmd)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/make_paper_fig2_arch.py)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/make_paper_fig3_compare.py)",
+      "Bash(/home/robotics/anaconda3/bin/python -)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/scan_can_candidates.py)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/make_paper_table1.py --max_objs 300)",
+      "Bash(/home/robotics/anaconda3/bin/python scripts/make_paper_table1.py --max_objs 400)"
     ]
   }
 }

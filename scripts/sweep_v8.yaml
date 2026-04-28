@@ -1,0 +1,40 @@
+# Wandb sweep config — v8 full single trial (옵션 A)
+#
+# 목적: v8 (xattn + multiscale + scale_dropout) 의 효과를 50 epoch 으로 확인.
+# 통과 기준: val_flow @ ep50 < 0.42 (v7 ep50 추정 0.45)
+# 통과 시: 250 epoch full 진행
+#
+# 시간: ~2 시간
+
+program: scripts/sweep_v8_trial.py
+method: grid
+metric:
+  name: val_flow_loss
+  goal: minimize
+
+parameters:
+  variant:
+    values:
+      - full              # xattn + multiscale_local + scale_dropout 모두 ON
+  epochs:
+    value: 50
+  batch_size:
+    value: 16
+  lr:
+    value: 0.001
+  weight_decay:
+    value: 0.05
+  warmup_frac:
+    value: 0.06
+  scale_dropout:
+    value: 0.5
+  cond_dropout:
+    value: 0.2
+  seed:
+    value: 42
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}

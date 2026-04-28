@@ -69,6 +69,19 @@ deploy2/viz/icp/*.html
 deploy/viz/gt_policy/*.html
 deploy/viz/icp/*.html
 
+# --- Deploy v3 (v8 sweep) 바이너리 — 동일 규칙 ---
+deploy3/onnx/*.onnx
+deploy3/yolo/*.onnx
+deploy3/yolo/*.pt
+deploy3/viz/*.html
+deploy3/viz/live/*.html
+deploy3/viz/gt/*.html
+deploy3/viz/gt_policy/*.html
+deploy3/viz/icp/*.html
+
+# --- Claude scheduler lock (런타임 임시) ---
+.claude/scheduled_tasks.lock
+
 # --- OS junk ---
 .DS_Store
 Thumbs.db

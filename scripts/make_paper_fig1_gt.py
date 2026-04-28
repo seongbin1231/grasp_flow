@@ -27,18 +27,20 @@ K_FX = K_FY = 1109.0
 K_CX, K_CY = 640.0, 360.0
 IMG_H, IMG_W = 720, 1280
 
-GRIPPER_HALF = 0.0425
-FINGER_LEN = 0.040
-PALM_BACK = 0.025
+GRIPPER_HALF = 0.0425 * 0.65
+FINGER_LEN = 0.040 * 0.65
+PALM_BACK = 0.025 * 0.65
 
 # 선택 case (각 모드 대표) — 실제 존재하는 obj_idx 로 수정
+# 사용자 요청: 서있는 캔, 누워있는 캔, 큐브
+# (label, sid, obj_idx, cls, mode, elev, azim)
 CASES = [
-    ("Standing (top-down 8 + side-45° 8 + side-cap 8 = 24)",
-     "sample_random6_31", 2, "bottle", "standing"),
-    ("Lying (4 pos × 3 tilts × 180° sym = 24)",
-     "sample_random6_11", 0, "can", "lying"),
-    ("Cube (edge-aligned 2 yaws)",
-     "sample_random6_30", 7, "cube_red", "cube"),
+    ("Standing can\n(top-down 8 + side-45 8 + side-cap 8 = 24)",
+     "sample_random6_32", 0, "can", "standing", -15, 205),
+    ("Lying can\n(4 pos x 3 tilts x 180 sym = 24)",
+     "sample_random6_11", 0, "can", "lying", -15, 205),
+    ("Cube\n(edge-aligned 2 yaws)",
+     "sample_random6_30", 7, "cube_red", "cube", -15, 205),
 ]
 
 
@@ -48,14 +50,24 @@ def poly_to_mask(poly):
     return m.astype(bool)
 
 
-def depth_mask_to_pc(depth_m, mask):
+def depth_mask_to_pc_rgb(depth_m, mask, rgb_bgr):
     ys, xs = np.where(mask & (depth_m > 0.1) & (depth_m < 2.0))
     if len(xs) == 0:
-        return np.zeros((0, 3), dtype=np.float32)
+        return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32)
     z = depth_m[ys, xs]
     x = (xs - K_CX) * z / K_FX
     y = (ys - K_CY) * z / K_FY
-    return np.stack([x, y, z], axis=1).astype(np.float32)
+    pc = np.stack([x, y, z], axis=1).astype(np.float32)
+    bgr = rgb_bgr[ys, xs]
+    rgb = bgr[:, ::-1].astype(np.float32) / 255.0
+    return pc, rgb
+
+
+def rgb_path_for_depth(depth_path: Path) -> Path:
+    name = depth_path.name.replace("_depth_", "_")
+    folder = depth_path.parent.name.replace("_dep", "")
+    base = depth_path.parent.parent.parent / "captured_images"
+    return base / folder / name
 
 
 def quat_wxyz_to_R(q):
@@ -94,7 +106,8 @@ def load_ply(name):
     return pts
 
 
-def render_panel(ax, sample_id, obj_idx, title, det_h5, grasps_h5, poses_h5):
+def render_panel(ax, sample_id, obj_idx, title, det_h5, grasps_h5, poses_h5,
+                 elev=15, azim=-65):
     g_s = grasps_h5[sample_id]
     p_s = poses_h5[sample_id]
     g_o = g_s[f"object_{obj_idx}"]
@@ -102,37 +115,41 @@ def render_panel(ax, sample_id, obj_idx, title, det_h5, grasps_h5, poses_h5):
 
     depth_path = ROOT / g_s.attrs["depth_path"]
     depth_m = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0
+    rgb_bgr = cv2.imread(str(rgb_path_for_depth(depth_path)), cv2.IMREAD_COLOR)
+    if rgb_bgr is None:
+        raise FileNotFoundError(f"RGB not found for {depth_path}")
     poly = np.asarray(det_h5[sample_id]["mask_poly"][obj_idx]).reshape(-1, 2)
     mask = poly_to_mask(poly)
-    scene_pts = depth_mask_to_pc(depth_m, mask)
-    if len(scene_pts) > 800:
-        scene_pts = scene_pts[np.random.default_rng(0).choice(len(scene_pts), 800, replace=False)]
+    scene_pts, scene_rgb = depth_mask_to_pc_rgb(depth_m, mask, rgb_bgr)
+    if len(scene_pts) > 1500:
+        sel = np.random.default_rng(0).choice(len(scene_pts), 1500, replace=False)
+        scene_pts = scene_pts[sel]; scene_rgb = scene_rgb[sel]
 
     ply_pts = load_ply(p_o.attrs["ply_file"])
     pose = np.asarray(p_o["pose_cam"])
     R = quat_wxyz_to_R(pose[3:7])
     obj_pts = (ply_pts @ R.T) + pose[:3]
 
-    # scene PC
-    ax.scatter(scene_pts[:, 0], scene_pts[:, 1], scene_pts[:, 2],
-               s=2, c="#4a90e2", alpha=0.35, edgecolors='none', label="Scene PC")
-    # PLY transformed
-    ax.scatter(obj_pts[:, 0], obj_pts[:, 1], obj_pts[:, 2],
-               s=1, c="#888888", alpha=0.4, edgecolors='none', label="Object model")
+    # scene PC: 실제 RGB 색 (그리퍼 가리지 않도록 투명/작게)
+    if len(scene_pts) > 0:
+        ax.scatter(scene_pts[:, 0], scene_pts[:, 1], scene_pts[:, 2],
+                   s=2.5, c=scene_rgb, alpha=0.45, edgecolors='none')
+    if len(obj_pts) > 0:
+        ax.scatter(obj_pts[:, 0], obj_pts[:, 1], obj_pts[:, 2],
+                   s=0.8, c='#bdbdbd', alpha=0.18, edgecolors='none')
 
     # All GT grasps
     grasps = np.asarray(g_o["grasps_cam"])
     groups = np.asarray(g_o["grasp_group"])
 
-    # group color: top-down/lying/cube 초록, side-cap 주황, side-45 빨강
-    color_map = {0: "#2ecc71", 1: "#f39c12", 2: "#2ecc71",
-                 3: "#2ecc71", 4: "#e74c3c"}
-    drawn_labels = set()
+    # group color: top-down/lying/cube 진한 파랑, side-cap 주황, side-45 빨강
+    color_map = {0: "#1976d2", 1: "#f39c12", 2: "#1976d2",
+                 3: "#1976d2", 4: "#e74c3c"}
     for k, grp in enumerate(groups):
         col = color_map.get(int(grp), "#666")
         for a, b in gripper_segs(grasps[k, :3], grasps[k, 3:7]):
             ax.plot([a[0], b[0]], [a[1], b[1]], [a[2], b[2]],
-                    color=col, linewidth=1.0, alpha=0.85)
+                    color=col, linewidth=1.5, alpha=1.0)
 
     if len(scene_pts) > 5:
         c = scene_pts.mean(axis=0)
@@ -144,8 +161,9 @@ def render_panel(ax, sample_id, obj_idx, title, det_h5, grasps_h5, poses_h5):
     ax.set_ylim(c[1]-r, c[1]+r)
     ax.set_zlim(c[2]-r, c[2]+r)
     ax.set_box_aspect([1, 1, 1])
-    ax.view_init(elev=-60, azim=-90)
-    ax.set_title(title, fontsize=10, pad=2)
+    ax.view_init(elev=elev, azim=azim, vertical_axis='y')
+    ax.invert_yaxis()   # cam +Y(아래) → 화면 아래로
+    ax.set_title(title, fontsize=15, pad=4)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
     ax.grid(False)
     # remove panes
@@ -155,34 +173,19 @@ def render_panel(ax, sample_id, obj_idx, title, det_h5, grasps_h5, poses_h5):
 
 
 def main():
-    fig = plt.figure(figsize=(12, 4.0), dpi=150)
+    fig = plt.figure(figsize=(13, 4.2), dpi=150)
     with h5py.File(GRASP_H5, "r") as g, h5py.File(POSES_H5, "r") as p, \
          h5py.File(DET_H5, "r") as d:
-        for i, (label, sid, idx, cls, mode) in enumerate(CASES, 1):
+        for i, (label, sid, idx, cls, mode, elev, azim) in enumerate(CASES, 1):
             ax = fig.add_subplot(1, 3, i, projection="3d")
-            render_panel(ax, sid, idx, label, d, g, p)
+            render_panel(ax, sid, idx, label, d, g, p, elev=elev, azim=azim)
 
-    # legend (figure level)
-    from matplotlib.lines import Line2D
-    handles = [
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='#4a90e2',
-               markersize=6, label='Scene depth point cloud', alpha=0.6),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='#888888',
-               markersize=6, label='Object model (ICP)', alpha=0.6),
-        Line2D([0], [0], color='#2ecc71', lw=2,
-               label='Top-down / lying / cube'),
-        Line2D([0], [0], color='#e74c3c', lw=2, label='Side-45° tilt'),
-        Line2D([0], [0], color='#f39c12', lw=2, label='Side-cap (90°)'),
-    ]
-    fig.legend(handles=handles, loc='lower center', ncol=5, fontsize=8,
-               frameon=False, bbox_to_anchor=(0.5, -0.02))
-    fig.suptitle("Fig 1. Mode-wise multi-modal GT grasp synthesis",
-                 fontsize=11, y=0.98)
-    plt.tight_layout(rect=[0, 0.04, 1, 0.94])
+    plt.subplots_adjust(left=0.0, right=1.0, top=0.92, bottom=0.0,
+                        wspace=0.0)
     out_png = OUT / "fig1_gt_synthesis.png"
     out_pdf = OUT / "fig1_gt_synthesis.pdf"
-    plt.savefig(out_png, dpi=200, bbox_inches='tight')
-    plt.savefig(out_pdf, bbox_inches='tight')
+    plt.savefig(out_png, dpi=220, bbox_inches='tight', pad_inches=0.02)
+    plt.savefig(out_pdf, bbox_inches='tight', pad_inches=0.02)
     print(f"[fig1] {out_png}")
     print(f"[fig1] {out_pdf}")
 

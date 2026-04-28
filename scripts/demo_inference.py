@@ -35,7 +35,7 @@ CKPT = _ckpt_candidate if _ckpt_candidate.exists() else (ROOT / _legacy_ckpt)
 YOLO_WEIGHTS = ROOT / "runs/yolov8m_seg_v3_1280/weights/best.pt"
 YOLO_CACHE = ROOT / "img_dataset/yolo_cache_v3/detections.h5"
 POSES = ROOT / "img_dataset/icp_cache/poses.h5"
-OUT_DIR = ROOT / "deploy/viz"
+OUT_DIR = ROOT / os.environ.get("YGRASP_OUT", "deploy/viz")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 N_SAMPLES = int(os.environ.get("YGRASP_N", 32))
@@ -68,15 +68,23 @@ GUIDANCE_SCALE = float(os.environ.get("YGRASP_GUIDANCE", 2.0))  # CFG: 1.0 = off
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ckpt = torch.load(CKPT, weights_only=False, map_location=device)
 cfg_args = ckpt["cfg"]["args"]
+
+ms_local_arg = cfg_args.get("multiscale_local", "") or ""
+ms_scales = tuple(int(x) for x in ms_local_arg.split(",")) if ms_local_arg else None
+
 model = FlowGraspNet(
     block_type=cfg_args["block"],
     n_blocks=cfg_args["n_blocks"],
     hidden=cfg_args["hidden"],
     cond_dropout=cfg_args["cond_dropout"],
+    use_xattn=bool(cfg_args.get("xattn", False)),
+    multiscale_local_scales=ms_scales,
+    scale_dropout=float(cfg_args.get("scale_dropout", 0.0)),
 ).to(device)
 model.load_state_dict(ckpt["ema"], strict=False)
 model.eval()
-print(f"[load] {CKPT.relative_to(ROOT)} ep={ckpt['epoch']} val_loss={ckpt.get('val_loss'):.4f}")
+print(f"[load] {CKPT.relative_to(ROOT)} ep={ckpt['epoch']} val_loss={ckpt.get('val_loss'):.4f}"
+      f"  xattn={cfg_args.get('xattn', False)} ms={ms_scales}")
 
 # norm stats (new checkpoints store these; fallback to training-set defaults)
 if "norm_stats" in ckpt:
@@ -158,8 +166,16 @@ def flow_sample(depth_np, uv_np, n=N_SAMPLES, steps=N_EULER_STEPS,
     """
     d = torch.from_numpy(depth_np).float().unsqueeze(0).unsqueeze(0).to(device)
     uv = torch.tensor([[uv_np[0], uv_np[1]]], dtype=torch.float32, device=device)
+
+    use_xattn = bool(getattr(model, "use_xattn", False))
     # encode once, reuse across steps and N samples
-    cond_on = model.encode(d, uv)                            # (1, 256)
+    if use_xattn:
+        g_feat, l_feats, l_concat = model._encode_features(d, uv)
+        cond_on = torch.cat([g_feat, l_concat], dim=-1)
+        g_feat_b = g_feat.expand(n, -1)
+        l_feats_b = [lf.expand(n, -1) for lf in l_feats]
+    else:
+        cond_on = model.encode(d, uv)                        # (1, 256)
     cond_on_b = cond_on.expand(n, -1)
     cond_off_b = torch.zeros_like(cond_on_b)                 # "null" condition
     uv_b = uv.expand(n, -1)
@@ -172,12 +188,23 @@ def flow_sample(depth_np, uv_np, n=N_SAMPLES, steps=N_EULER_STEPS,
         t_val = k * dt
         t_b = torch.full((n,), t_val, device=device)
         t_emb = sinusoidal_time_embed(t_b, dim=64)
-        v_cond = model.velocity(g_t, cond_on_b, t_emb, uv_norm)
-        if abs(guidance - 1.0) < 1e-6:
-            v = v_cond
+        if use_xattn:
+            tokens_on = model._build_cond_tokens(g_feat_b, l_feats_b, t_emb, uv_norm)
+            tokens_off = torch.zeros_like(tokens_on)
+            v_cond = model.velocity(g_t, cond_on_b, t_emb, uv_norm, cond_tokens=tokens_on)
+            if abs(guidance - 1.0) < 1e-6:
+                v = v_cond
+            else:
+                v_uncond = model.velocity(g_t, cond_off_b, t_emb, uv_norm,
+                                           cond_tokens=tokens_off)
+                v = v_uncond + guidance * (v_cond - v_uncond)
         else:
-            v_uncond = model.velocity(g_t, cond_off_b, t_emb, uv_norm)
-            v = v_uncond + guidance * (v_cond - v_uncond)
+            v_cond = model.velocity(g_t, cond_on_b, t_emb, uv_norm)
+            if abs(guidance - 1.0) < 1e-6:
+                v = v_cond
+            else:
+                v_uncond = model.velocity(g_t, cond_off_b, t_emb, uv_norm)
+                v = v_uncond + guidance * (v_cond - v_uncond)
         g_t = g_t + v * dt
 
     g_1 = g_t.cpu().numpy()

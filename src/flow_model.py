@@ -77,6 +77,61 @@ class LocalCropEncoder(nn.Module):
         return self.head(self.net(crop))
 
 
+class MultiScaleLocalCropEncoder(nn.Module):
+    """[A2] Depth crops at multiple scales (e.g. 64/192/384 px) around (u, v).
+
+    Each scale has its own encoder (specialized for object size).
+    Returns concat feature (B, out_dim_per_scale * len(scales))
+    + per-scale list (used as separate cross-attn tokens by FlowGraspNet).
+    """
+    def __init__(self, out_dim_per_scale: int = 128,
+                 scales: tuple[int, ...] = (64, 192, 384)):
+        super().__init__()
+        self.scales = scales
+        self.out_dim_per_scale = out_dim_per_scale
+        self.encoders = nn.ModuleList([
+            self._make_encoder(out_dim_per_scale) for _ in scales
+        ])
+
+    @staticmethod
+    def _make_encoder(out_dim: int) -> nn.Module:
+        return nn.Sequential(
+            conv_block(1, 32, s=2),
+            conv_block(32, 64, s=2),
+            conv_block(64, 128, s=2),
+            conv_block(128, 128, s=2),
+            nn.AdaptiveAvgPool2d(1), nn.Flatten(),
+            nn.Linear(128, out_dim), nn.SiLU(inplace=True),
+        )
+
+    def forward_per_scale(self, depth: torch.Tensor, uv: torch.Tensor,
+                           scale_dropout: float = 0.0) -> list[torch.Tensor]:
+        """학습 시 scale_dropout 확률로 random 1 scale 만 활성, 나머지는 zero vector.
+        정보 중복 방어 (Stochastic Depth 의 multi-scale 적용)."""
+        n_scales = len(self.scales)
+        if self.training and scale_dropout > 0 and torch.rand(1).item() < scale_dropout:
+            keep_idx = int(torch.randint(0, n_scales, (1,)).item())
+            feats = []
+            for i, (crop_size, enc) in enumerate(zip(self.scales, self.encoders)):
+                if i == keep_idx:
+                    crop = crop_around_uv(depth, uv, crop=crop_size)
+                    feats.append(enc(crop))
+                else:
+                    feats.append(torch.zeros(depth.size(0), self.out_dim_per_scale,
+                                              device=depth.device, dtype=depth.dtype))
+            return feats
+        feats = []
+        for crop_size, enc in zip(self.scales, self.encoders):
+            crop = crop_around_uv(depth, uv, crop=crop_size)
+            feats.append(enc(crop))
+        return feats
+
+    def forward(self, depth: torch.Tensor, uv: torch.Tensor,
+                 scale_dropout: float = 0.0) -> torch.Tensor:
+        feats = self.forward_per_scale(depth, uv, scale_dropout=scale_dropout)
+        return torch.cat(feats, dim=-1)
+
+
 def crop_around_uv(depth: torch.Tensor, uv: torch.Tensor, crop: int = CROP) -> torch.Tensor:
     """Crop (B, 1, H, W) around (u, v) using grid_sample for ONNX compatibility.
 
@@ -147,12 +202,55 @@ class AdaLNZeroBlock(nn.Module):
         return x + alpha * h
 
 
+class CrossAttnBlock(nn.Module):
+    """[A1] g_t (query) ↔ cond_tokens (key/value) cross-attention.
+
+    Zero-init out_proj → block starts as identity (DiT 관례: 학습 초반 v7 동작 보존).
+    ONNX-safe: 명시적 einsum + reshape, scaled_dot_product_attention 미사용 (opset 17 호환).
+    """
+    def __init__(self, dim: int, token_dim: int, n_heads: int = 4):
+        super().__init__()
+        assert dim % n_heads == 0, f"hidden dim {dim} not divisible by n_heads {n_heads}"
+        self.dim = dim
+        self.n_heads = n_heads
+        self.head_dim = dim // n_heads
+        self.q_proj = nn.Linear(dim, dim, bias=False)
+        self.k_proj = nn.Linear(token_dim, dim, bias=False)
+        self.v_proj = nn.Linear(token_dim, dim, bias=False)
+        self.out_proj = nn.Linear(dim, dim)
+        self.ln_q = nn.LayerNorm(dim)
+        self.ln_kv = nn.LayerNorm(token_dim)
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, x: torch.Tensor, cond_tokens: torch.Tensor) -> torch.Tensor:
+        """x: (B, dim) query feature.
+        cond_tokens: (B, T, token_dim) — multiple condition tokens.
+        """
+        B = x.size(0)
+        T = cond_tokens.size(1)
+        q = self.q_proj(self.ln_q(x))                                 # (B, dim)
+        kv = self.ln_kv(cond_tokens)
+        k = self.k_proj(kv)                                            # (B, T, dim)
+        v = self.v_proj(kv)
+        # multi-head reshape
+        q = q.view(B, self.n_heads, 1, self.head_dim)                  # (B, H, 1, d)
+        k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)  # (B, H, T, d)
+        v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        attn = torch.einsum("bhqd,bhkd->bhqk", q, k) / (self.head_dim ** 0.5)
+        attn = F.softmax(attn, dim=-1)
+        ctx = torch.einsum("bhqk,bhkd->bhqd", attn, v)                 # (B, H, 1, d)
+        ctx = ctx.squeeze(2).reshape(B, self.dim)
+        return x + self.out_proj(ctx)
+
+
 BLOCK_TYPES = {"film": FiLMBlock, "adaln_zero": AdaLNZeroBlock}
 
 
 class VelocityMLP(nn.Module):
     def __init__(self, g_dim: int = 8, cond_dim: int = 256, t_dim: int = 64,
-                 hidden: int = 512, n_blocks: int = 4, block_type: str = "adaln_zero"):
+                 hidden: int = 512, n_blocks: int = 4, block_type: str = "adaln_zero",
+                 use_xattn: bool = False):
         super().__init__()
         self.in_proj = nn.Linear(g_dim, hidden)
         self.cond_proj = nn.Linear(cond_dim + t_dim + 2, cond_dim)  # +uv(2)
@@ -160,16 +258,27 @@ class VelocityMLP(nn.Module):
         self.blocks = nn.ModuleList([
             Block(hidden, cond_dim) for _ in range(n_blocks)
         ])
+        self.use_xattn = use_xattn
+        if use_xattn:
+            self.cross_blocks = nn.ModuleList([
+                CrossAttnBlock(hidden, cond_dim) for _ in range(n_blocks)
+            ])
         self.out = nn.Linear(hidden, g_dim)
         self.cond_dim = cond_dim
         self.block_type = block_type
 
-    def forward(self, g_t, cond_feat, t_emb, uv_norm):
+    def forward(self, g_t, cond_feat, t_emb, uv_norm, cond_tokens=None):
         cond = torch.cat([cond_feat, t_emb, uv_norm], dim=-1)
         cond = self.cond_proj(cond)
         h = self.in_proj(g_t)
-        for blk in self.blocks:
-            h = blk(h, cond)
+        if self.use_xattn:
+            assert cond_tokens is not None, "cond_tokens required for use_xattn"
+            for blk, cattn in zip(self.blocks, self.cross_blocks):
+                h = cattn(h, cond_tokens)        # 1) Cross-Attn (token routing)
+                h = blk(h, cond)                  # 2) AdaLN-Zero (variable scale/shift)
+        else:
+            for blk in self.blocks:
+                h = blk(h, cond)
         return self.out(h)
 
 
@@ -184,52 +293,107 @@ class FlowGraspNet(nn.Module):
         n_blocks: int = 4,
         cond_dropout: float = 0.2,
         block_type: str = "adaln_zero",
+        use_xattn: bool = False,                     # v8 [A1] Cross-Attention
+        multiscale_local_scales: tuple | None = None,  # v8 [A2] Multi-Scale Crop, e.g. (96,192,384)
+        scale_dropout: float = 0.0,                   # v8 [A2 안전장치] random scale drop
     ):
         super().__init__()
         self.global_enc = GlobalDepthEncoder(global_dim)
-        self.local_enc = LocalCropEncoder(local_dim)
+        self.use_multiscale = multiscale_local_scales is not None
+        if self.use_multiscale:
+            self.local_enc = MultiScaleLocalCropEncoder(
+                out_dim_per_scale=local_dim,
+                scales=tuple(multiscale_local_scales))
+            self.n_local_scales = len(multiscale_local_scales)
+        else:
+            self.local_enc = LocalCropEncoder(local_dim)
+            self.n_local_scales = 1
+        self.scale_dropout = scale_dropout
+        cond_dim = global_dim + local_dim * self.n_local_scales   # v7: 256, v8 multiscale 3: 512
         self.cond_dropout = cond_dropout
-        self.aux_mode_head = nn.Linear(global_dim + local_dim, 3)  # lying/standing/cube
+        self.aux_mode_head = nn.Linear(cond_dim, 3)  # lying/standing/cube
+        self.use_xattn = use_xattn
+        if use_xattn:
+            # cond tokens: global(1) + local×N + time(1) + uv(1)
+            self.global_token_proj = nn.Linear(global_dim, cond_dim)
+            self.local_token_projs = nn.ModuleList([
+                nn.Linear(local_dim, cond_dim) for _ in range(self.n_local_scales)
+            ])
+            self.time_token_proj = nn.Linear(t_dim, cond_dim)
+            self.uv_token_proj = nn.Linear(2, cond_dim)
         self.velocity = VelocityMLP(
-            g_dim=g_dim, cond_dim=global_dim + local_dim,
+            g_dim=g_dim, cond_dim=cond_dim,
             t_dim=t_dim, hidden=hidden, n_blocks=n_blocks,
-            block_type=block_type,
+            block_type=block_type, use_xattn=use_xattn,
         )
         self.block_type = block_type
 
-    def encode(self, depth: torch.Tensor, uv: torch.Tensor):
+    def _encode_features(self, depth: torch.Tensor, uv: torch.Tensor):
+        """Returns (g_feat, l_feats_list, l_feat_concat). l_feats_list 길이 = n_local_scales."""
         d = clip_norm_depth(depth)
-        g_feat = self.global_enc(d)                          # (B, 128)
-        crop = crop_around_uv(d, uv)                          # (B, 1, 192, 192)
-        l_feat = self.local_enc(crop)                         # (B, 128)
-        cond = torch.cat([g_feat, l_feat], dim=-1)            # (B, 256)
-        return cond
+        g_feat = self.global_enc(d)
+        if self.use_multiscale:
+            l_feats = self.local_enc.forward_per_scale(d, uv,
+                                                        scale_dropout=self.scale_dropout)
+            l_feat_concat = torch.cat(l_feats, dim=-1)
+        else:
+            crop = crop_around_uv(d, uv)
+            l_feat = self.local_enc(crop)
+            l_feat_concat = l_feat
+            l_feats = [l_feat]
+        return g_feat, l_feats, l_feat_concat
+
+    def encode(self, depth: torch.Tensor, uv: torch.Tensor):
+        """추론용 backward-compatible: cond 만 반환 (B, cond_dim)."""
+        g_feat, _, l_feat_concat = self._encode_features(depth, uv)
+        return torch.cat([g_feat, l_feat_concat], dim=-1)
+
+    def _build_cond_tokens(self, g_feat, l_feats, t_emb, uv_norm):
+        """Cross-attn 용 토큰 생성. (B, T, cond_dim) where T = 1 + n_local_scales + 2."""
+        tokens = [self.global_token_proj(g_feat)]
+        for proj, l in zip(self.local_token_projs, l_feats):
+            tokens.append(proj(l))
+        tokens.append(self.time_token_proj(t_emb))
+        tokens.append(self.uv_token_proj(uv_norm))
+        return torch.stack(tokens, dim=1)
 
     def forward(self, depth, uv, g_t, t):
-        """ONNX forward. depth (B,1,720,1280), uv (B,2), g_t (B,8), t (B,)."""
-        cond = self.encode(depth, uv)
+        g_feat, l_feats, l_concat = self._encode_features(depth, uv)
+        cond = torch.cat([g_feat, l_concat], dim=-1)
         if self.training and self.cond_dropout > 0:
             mask = (torch.rand(cond.shape[0], 1, device=cond.device)
                     > self.cond_dropout).float()
             cond = cond * mask
         t_emb = sinusoidal_time_embed(t, dim=64)
         uv_norm = torch.stack([uv[:, 0] / IMG_W, uv[:, 1] / IMG_H], dim=-1)
-        v = self.velocity(g_t, cond, t_emb, uv_norm)
-        return v
+        if self.use_xattn:
+            cond_tokens = self._build_cond_tokens(g_feat, l_feats, t_emb, uv_norm)
+            if self.training and self.cond_dropout > 0:
+                cond_tokens = cond_tokens * mask.unsqueeze(-1)
+            return self.velocity(g_t, cond, t_emb, uv_norm, cond_tokens=cond_tokens)
+        return self.velocity(g_t, cond, t_emb, uv_norm)
 
     def forward_with_aux(self, depth, uv, g_t, t):
-        cond = self.encode(depth, uv)
-        # aux_mode_head uses PRE-dropout cond — otherwise unconditional (cond=0) samples
-        # would train aux on noise, contaminating mode classification
+        g_feat, l_feats, l_concat = self._encode_features(depth, uv)
+        cond = torch.cat([g_feat, l_concat], dim=-1)
+        # aux_mode_head uses PRE-dropout cond
         mode_logits = self.aux_mode_head(cond)
         cond_for_velocity = cond
+        mask = None
         if self.training and self.cond_dropout > 0:
             mask = (torch.rand(cond.shape[0], 1, device=cond.device)
                     > self.cond_dropout).float()
             cond_for_velocity = cond * mask
         t_emb = sinusoidal_time_embed(t, dim=64)
         uv_norm = torch.stack([uv[:, 0] / IMG_W, uv[:, 1] / IMG_H], dim=-1)
-        v = self.velocity(g_t, cond_for_velocity, t_emb, uv_norm)
+        if self.use_xattn:
+            cond_tokens = self._build_cond_tokens(g_feat, l_feats, t_emb, uv_norm)
+            if mask is not None:
+                cond_tokens = cond_tokens * mask.unsqueeze(-1)
+            v = self.velocity(g_t, cond_for_velocity, t_emb, uv_norm,
+                               cond_tokens=cond_tokens)
+        else:
+            v = self.velocity(g_t, cond_for_velocity, t_emb, uv_norm)
         return v, mode_logits
 
 
