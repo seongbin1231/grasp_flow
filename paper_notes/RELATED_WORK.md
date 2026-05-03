@@ -258,7 +258,7 @@ GraspVLA 가 가장 가깝지만 (a) bbox vs (u,v), (b) end-to-end vs 모듈, (c
 | Sample-and-score | **6-DoF GraspNet** (Mousavian ICCV'19) | [NVlabs/6dof-graspnet](https://github.com/NVlabs/6dof-graspnet) | VAE 2-stage 느림 |
 | Generative (직접 대비) | **SE(3)-DiffusionFields** (Urain ICRA'23) | [robotgradient/grasp_diffusion](https://github.com/robotgradient/grasp_diffusion) | 다단계 score diffusion, point-cloud |
 | Generative (FM 직접 대비) | **EquiGraspFlow** (Lim CoRL'24) | [project](https://equigraspflow.github.io/) | CNF, point-cloud, equivariant |
-| Pixel-conditioning 직접 대비 | **TOGNet** (Lu ECCV-W'24) | (코드 공개 여부 확인 필요) | anchor-based, mode collapse 동일 |
+| Pixel-conditioning 직접 대비 | **TOGNet** (Xie ECCV-W'24) | 코드 미공개 — **RNGNet (Chen et al., 2024)** 으로 대체 | anchor-based, mode collapse 동일 |
 | (옵션) 새 SOTA | **GraspGen** (NVIDIA 2025) | [graspgen.github.io](https://graspgen.github.io/) | 53M dataset, DDPM-Transformer |
 | (옵션) | **GraspLDM** (Barad Access'24) | [code](https://github.com/kuldeepbrd1/graspLDM) | Latent diffusion |
 

@@ -35,7 +35,7 @@ ROOT = Path("/home/robotics/Competition/YOLO_Grasp")
 sys.path.insert(0, str(ROOT))
 
 from src.flow_dataset import GraspDataset, make_weighted_sampler
-from src.flow_model import FlowGraspNet, EMA
+from src.flow_model import FlowGraspNet, FlowGraspNetPC, EMA
 
 
 def parse_args():
@@ -74,8 +74,27 @@ def parse_args():
     ap.add_argument("--multiscale_local", type=str, default="",
                     help="[v8 A2] comma-separated crop scales e.g. '96,192,384'. "
                          "empty = v7 single 192px")
+    ap.add_argument("--rot_repr", choices=["approach_yaw", "zhou6d"],
+                    default="approach_yaw",
+                    help="grasp rotation representation: 8D approach+sincos vs 9D Zhou 6D")
     ap.add_argument("--scale_dropout", type=float, default=0.0,
                     help="[v8 A2 안전장치] prob of using only 1 random scale during training")
+    ap.add_argument("--use_pc", action="store_true",
+                    help="[v9 B1 hybrid] Add Mini-PointNet token from depth-back-projected PC")
+    ap.add_argument("--pc_n_points", type=int, default=512,
+                    help="[v9 B1] sub-sample size for PC")
+    ap.add_argument("--pc_dim", type=int, default=128,
+                    help="[v9 B1] PC feature dim")
+    ap.add_argument("--pc_crop", type=int, default=192,
+                    help="[v9 B1] crop size for PC back-projection source")
+    ap.add_argument("--use_pc_only", action="store_true",
+                    help="[v9 PC-only] Replace depth CNN encoder with PC encoder. "
+                         "Uses FlowGraspNetPC (anchor-centered, multi-scale ball-query, "
+                         "hybrid sparse+dense scene PC). Mutually exclusive with --use_pc.")
+    ap.add_argument("--pretrained", type=str, default="",
+                    help="warm-start path to .pt (loads model weights only, "
+                         "no optimizer/EMA state). Use for stage 2/3 progressive "
+                         "training or ablation variants from a v7/v8 checkpoint.")
     return ap.parse_args()
 
 
@@ -85,9 +104,17 @@ def flow_matching_loss(v_pred, g_1, g_0):
     return F.mse_loss(v_pred, v_target)
 
 
-def _dim_weights(rot_weight: float, device) -> torch.Tensor:
-    """8D weights: pos(3)×1.0, approach(3)×rot_weight, sincos(2)×rot_weight."""
-    w = [1.0, 1.0, 1.0, rot_weight, rot_weight, rot_weight, rot_weight, rot_weight]
+def _dim_weights(rot_weight: float, device, g_dim: int = 8) -> torch.Tensor:
+    """Per-dim MSE weights.
+      8D (approach_yaw): pos(3)×1, approach(3)×rw, sincos(2)×rw
+      9D (zhou6d):       pos(3)×1, R[:,0](3)×rw,  R[:,1](3)×rw
+    """
+    if g_dim == 8:
+        w = [1.0] * 3 + [rot_weight] * 5
+    elif g_dim == 9:
+        w = [1.0] * 3 + [rot_weight] * 6
+    else:
+        raise ValueError(f"unsupported g_dim={g_dim}")
     return torch.tensor(w, device=device, dtype=torch.float32)
 
 
@@ -136,7 +163,7 @@ def evaluate(model, loader, device, max_batches=None, dim_w=None, symmetry=False
         g_t = (1 - t)[:, None] * g_0 + t[:, None] * g_1
         v_pred, mode_logits = model.forward_with_aux(depth, uv, g_t, t)
         if dim_w is None:
-            dim_w = torch.ones(8, device=device)
+            dim_w = torch.ones(g_1.size(-1), device=device)
         if symmetry:
             per_sample_loss = torch.minimum(
                 weighted_flow_loss(v_pred, g_1 - g_0, dim_w),
@@ -189,8 +216,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[train] device={device}")
 
-    train_ds = GraspDataset(args.h5, split="train", augment=True, preload_depth=True)
-    val_ds = GraspDataset(args.h5, split="val", augment=False, preload_depth=True)
+    train_ds = GraspDataset(args.h5, split="train", augment=True, preload_depth=True,
+                            rot_repr=args.rot_repr)
+    val_ds = GraspDataset(args.h5, split="val", augment=False, preload_depth=True,
+                          rot_repr=args.rot_repr)
+    print(f"[train] rot_repr={args.rot_repr}  g_dim={train_ds.g_dim}")
 
     # mode 분포 확인
     train_mode_bins = np.bincount(train_ds.mode, minlength=3)
@@ -225,16 +255,57 @@ def main():
         print(f"[train] [v8] Cross-Attention ENABLED")
     if args.scale_dropout > 0:
         print(f"[train] [v8] scale_dropout = {args.scale_dropout}")
+    if args.use_pc:
+        print(f"[train] [v9 hybrid] Point Cloud token ENABLED  "
+              f"N={args.pc_n_points}  dim={args.pc_dim}  crop={args.pc_crop}")
+    if args.use_pc_only:
+        print(f"[train] [v9 PC-only] FlowGraspNetPC: depth → PC encoder 전면 교체")
 
-    model = FlowGraspNet(
-        cond_dropout=args.cond_dropout, block_type=args.block,
-        n_blocks=args.n_blocks, hidden=args.hidden,
-        use_xattn=args.xattn,
-        multiscale_local_scales=ms_scales,
-        scale_dropout=args.scale_dropout,
-    ).to(device)
+    if args.use_pc_only:
+        if args.use_pc:
+            raise ValueError("--use_pc_only 와 --use_pc 동시 사용 불가")
+        model = FlowGraspNetPC(
+            g_dim=train_ds.g_dim,
+            cond_dropout=args.cond_dropout, block_type=args.block,
+            n_blocks=args.n_blocks, hidden=args.hidden,
+            use_xattn=args.xattn,    # cfg.args.xattn 따름 (sweep 에서 ON/OFF)
+        ).to(device)
+    else:
+        model = FlowGraspNet(
+            g_dim=train_ds.g_dim,
+            cond_dropout=args.cond_dropout, block_type=args.block,
+            n_blocks=args.n_blocks, hidden=args.hidden,
+            use_xattn=args.xattn,
+            multiscale_local_scales=ms_scales,
+            scale_dropout=args.scale_dropout,
+            use_pc=args.use_pc,
+            pc_n_points=args.pc_n_points,
+            pc_dim=args.pc_dim,
+            pc_crop=args.pc_crop,
+        ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[train] params: {n_params/1e6:.2f} M")
+
+    if args.pretrained:
+        if not Path(args.pretrained).exists():
+            raise FileNotFoundError(f"--pretrained not found: {args.pretrained}")
+        ckpt = torch.load(args.pretrained, map_location='cpu')
+        # ckpt could be: {'model':..., 'ema':..., 'opt':...} or just state_dict
+        if isinstance(ckpt, dict) and 'model' in ckpt:
+            sd = ckpt['model']
+        elif isinstance(ckpt, dict) and 'ema' in ckpt:
+            sd = ckpt['ema']
+        elif isinstance(ckpt, dict) and 'state_dict' in ckpt:
+            sd = ckpt['state_dict']
+        else:
+            sd = ckpt
+        missing, unexpected = model.load_state_dict(sd, strict=False)
+        print(f"[train] [pretrained] loaded {args.pretrained}")
+        print(f"[train] [pretrained] missing={len(missing)}, unexpected={len(unexpected)}")
+        if missing:
+            print(f"[train] [pretrained] missing keys (sample): {missing[:5]}")
+        if unexpected:
+            print(f"[train] [pretrained] unexpected keys (sample): {unexpected[:5]}")
 
     optim = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
@@ -263,7 +334,7 @@ def main():
     global_step = 0
     jsonl_f = open(jsonl_path, "w")
 
-    dim_w = _dim_weights(args.rot_loss_weight, device)
+    dim_w = _dim_weights(args.rot_loss_weight, device, g_dim=train_ds.g_dim)
     print(f"[train] dim weights = {dim_w.tolist()}  (rot_weight={args.rot_loss_weight})")
     if args.symmetry_loss:
         print(f"[train] symmetry-aware loss ENABLED (lying 180° pairs)")

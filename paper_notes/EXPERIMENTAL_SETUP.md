@@ -249,7 +249,7 @@
 
 ## 5. 베이스라인 — Pixel-prompted (가장 중요)
 
-### 🎯 TOGNet (Lu et al., **ECCV-W 2024**) — **반드시 포함**
+### 🎯 TOGNet (Xie et al., **ECCV-W 2024**) — **코드 미공개, RNGNet 으로 대체**
 - **Repo**: [liuliu66/TOGNet](https://github.com/liuliu66/TOGNet) **(코드 공개 확인)**
 - **License**: MIT ✅
 - **사전학습 ckpt**: ✅ (GraspNet-1B 학습)

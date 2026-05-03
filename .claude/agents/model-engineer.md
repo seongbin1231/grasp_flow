@@ -8,20 +8,41 @@ model: opus
 
 `(depth, uv) → 다양한 6-DoF grasp candidates` 생성 모델. Rectified Flow로 다봉 분포 학습. **출력은 카메라 프레임**, base 변환은 MATLAB.
 
-## 현재 상태 (2026-04-21, 최종)
+## 현재 상태 (2026-05-01, 최종)
 
-- **프로젝트 최종 체크포인트**: `runs/yolograsp_v2/v6_150ep/adaln_zero_lr0.001_nb8_h768/checkpoints/best.pt` (ep 118/150, val_flow=**0.3640**)
+- **프로젝트 최종 체크포인트**: `runs/yolograsp_v2/zhou_9d_full_250ep/adaln_zero_lr0.001_nb8_h768/checkpoints/best.pt` (ep 250/250, val_flow=**0.2419**, **9D Zhou 6D**, 14.8M params, depth+uv 입력)
+- **MATLAB 팀 production (deploy2)**: `runs/yolograsp_v2/v7_v4policy_big/.../best.pt` (8D, val 0.3676) — 새 zhou_9d 250ep 으로 ONNX 재export 후 deploy3 교체 예정
 - 아키텍처 확정: AdaLN-Zero × **8 blocks**, hidden **768**, EMA 0.9998, warmup_frac 0.04, cond_dropout 0.2 (CFG 지원)
-- 학습 손실: Flow Matching + **symmetric_min_loss** (lying 180° 대칭) + per-dim weights (pos×1, approach×2, sincos×2) + pos z-score 정규화
-- 데이터 sampler: **marker_boost=4.0**, spam_boost=2.5
-- ONNX export 완료: `deploy/onnx/{encoder,velocity}.onnx` + meta.json (**encoder/velocity 분리 export**, sinusoidal time embed 내장)
+- 학습 손실: Flow Matching + **symmetric_min_loss** (lying 180° 대칭) + per-dim weights (pos×1, rot×2 × g_dim 자동) + pos z-score 정규화
+- 데이터 sampler: **marker_boost=1.5**, spam_boost=2.5 (v4 정책 표준)
+- ONNX export 완료 (v7 기준): `deploy2/onnx/{encoder,velocity}.onnx` + meta.json (**encoder/velocity 분리**, sinusoidal time embed 내장)
 - 필터 최종: body_margin=5mm (wrist+stem, palm 제외), tip-sweep=15mm (closure path), best-pick = top-down(|a_z|>0.7) → uv 3D 최단
-- Known weakness: **lying marker** pos 6~10cm 오차 — 데이터 부족 아님 (10.6% × boost 4× = 유효 42%). 원인은 물리적 얇음(∅10mm) → 192×192 local crop 98%가 배경. MATLAB YOLO-anchored fallback 권장
+- Known weakness: **lying marker** pos 4~10cm 오차 — 데이터 부족 아님. 원인은 물리적 얇음(∅10mm) → 192×192 local crop 98%가 배경. MATLAB YOLO-anchored fallback 권장
+
+## 회전 표현 분기 (`--rot_repr`)
+
+`scripts/train_flow.py --rot_repr {approach_yaw|zhou6d}`. dataset 의 `g_dim` property 가 자동 분기.
+
+| rot_repr | g_dim | 구성 | val (50ep) | val (250ep) |
+|---|---|---|---|---|
+| `approach_yaw` (legacy) | 8 | pos(3)+approach(3)+sin/cos yaw(2) | 0.3623 | 0.3676 (v7) |
+| **`zhou6d`** ⭐ | 9 | pos(3)+R[:,0:2] flatten(6) | 0.2786 | **0.2419** |
+
+→ 9D 가 −34% 우세. Zhou et al. CVPR 2019 인용. 신규 학습은 `zhou6d` 기본.
+
+## 입력 표현 분기 (`--use_pc_only`)
+
+`FlowGraspNet` (depth+uv) vs `FlowGraspNetPC` (PC token, 별도 클래스).
+
+| 입력 | 250ep val | standing | 결론 |
+|---|---|---|---|
+| **depth+uv** ⭐ | 0.2419 | 0.669 | production. small-data 친화 |
+| PC (4096 pts) | 0.2748 | 0.834 | −13.6% 열세, standing 격차 큼. 논문 ablation 으로 살림 |
 
 ## 핵심 역할
 
 1. **아키텍처**: Depth ResNet-18 + (u,v) Gaussian pool + FiLM → flow velocity MLP
-2. **파라미터화**: g = (x, y, z, a_x, a_y, a_z, sin_yaw, cos_yaw) 8D (approach unit + yaw sincos). Quat 변환은 후처리
+2. **파라미터화**: 신규 학습은 9D Zhou — g = (x, y, z, R00, R10, R20, R01, R11, R21). 추론 시 Gram-Schmidt 후처리로 SO(3) 복원. Quat 변환은 R → quat. (Legacy 8D approach_yaw 도 `--rot_repr approach_yaw` 로 호환)
 3. **Flow Matching loss**: `‖v_θ(g_t, t, c) − (g_1 − g_0)‖²`
 4. **Multi-modal**: unrolled GT (object당 grasp 하나 랜덤 샘플) → 같은 (depth, uv)에 epoch마다 다른 GT → 다봉 분포 학습
 5. **추론**: Reflow 1-step, N=32~64 다른 노이즈로 병렬 생성

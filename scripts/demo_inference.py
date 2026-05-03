@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from src.flow_dataset import (
     CAM_CX, CAM_CY, IMG_H, IMG_W, K_FX, K_FY, _build_R_tool,
 )
-from src.flow_model import FlowGraspNet
+from src.flow_model import FlowGraspNet, FlowGraspNetPC
 
 import os
 _default_ckpt = "runs/yolograsp_v2/v2_posnorm/checkpoints/best.pt"
@@ -71,20 +71,39 @@ cfg_args = ckpt["cfg"]["args"]
 
 ms_local_arg = cfg_args.get("multiscale_local", "") or ""
 ms_scales = tuple(int(x) for x in ms_local_arg.split(",")) if ms_local_arg else None
+ROT_REPR = cfg_args.get("rot_repr", "approach_yaw")
+G_DIM = 9 if ROT_REPR == "zhou6d" else 8
+USE_PC_ONLY = bool(cfg_args.get("use_pc_only", False))
 
-model = FlowGraspNet(
-    block_type=cfg_args["block"],
-    n_blocks=cfg_args["n_blocks"],
-    hidden=cfg_args["hidden"],
-    cond_dropout=cfg_args["cond_dropout"],
-    use_xattn=bool(cfg_args.get("xattn", False)),
-    multiscale_local_scales=ms_scales,
-    scale_dropout=float(cfg_args.get("scale_dropout", 0.0)),
-).to(device)
+if USE_PC_ONLY:
+    # Legacy ckpt (zhou_9d_pc_only, ep<=30) was trained with hard-coded use_xattn=True.
+    # New sweep ckpts read cfg.args.xattn. Detect by run path or explicit cfg flag.
+    legacy_pc_xattn = "zhou_9d_pc_only" in str(CKPT) and "sweep" not in str(CKPT)
+    pc_xattn = True if legacy_pc_xattn else bool(cfg_args.get("xattn", False))
+    model = FlowGraspNetPC(
+        g_dim=G_DIM,
+        block_type=cfg_args["block"],
+        n_blocks=cfg_args["n_blocks"],
+        hidden=cfg_args["hidden"],
+        cond_dropout=cfg_args["cond_dropout"],
+        use_xattn=pc_xattn,
+    ).to(device)
+else:
+    model = FlowGraspNet(
+        g_dim=G_DIM,
+        block_type=cfg_args["block"],
+        n_blocks=cfg_args["n_blocks"],
+        hidden=cfg_args["hidden"],
+        cond_dropout=cfg_args["cond_dropout"],
+        use_xattn=bool(cfg_args.get("xattn", False)),
+        multiscale_local_scales=ms_scales,
+        scale_dropout=float(cfg_args.get("scale_dropout", 0.0)),
+    ).to(device)
 model.load_state_dict(ckpt["ema"], strict=False)
 model.eval()
 print(f"[load] {CKPT.relative_to(ROOT)} ep={ckpt['epoch']} val_loss={ckpt.get('val_loss'):.4f}"
-      f"  xattn={cfg_args.get('xattn', False)} ms={ms_scales}")
+      f"  rot_repr={ROT_REPR} g_dim={G_DIM} use_pc_only={USE_PC_ONLY} "
+      f"xattn={cfg_args.get('xattn', False)} ms={ms_scales}")
 
 # norm stats (new checkpoints store these; fallback to training-set defaults)
 if "norm_stats" in ckpt:
@@ -170,7 +189,12 @@ def flow_sample(depth_np, uv_np, n=N_SAMPLES, steps=N_EULER_STEPS,
     use_xattn = bool(getattr(model, "use_xattn", False))
     # encode once, reuse across steps and N samples
     if use_xattn:
-        g_feat, l_feats, l_concat = model._encode_features(d, uv)
+        # FlowGraspNetPC._encode_features returns 4-tuple, FlowGraspNet returns 3-tuple
+        feats = model._encode_features(d, uv)
+        if len(feats) == 4:
+            g_feat, l_feats, l_concat, _anchor = feats   # PC-only
+        else:
+            g_feat, l_feats, l_concat = feats              # depth model
         cond_on = torch.cat([g_feat, l_concat], dim=-1)
         g_feat_b = g_feat.expand(n, -1)
         l_feats_b = [lf.expand(n, -1) for lf in l_feats]
@@ -182,7 +206,7 @@ def flow_sample(depth_np, uv_np, n=N_SAMPLES, steps=N_EULER_STEPS,
     uv_norm = torch.stack([uv_b[:, 0] / IMG_W, uv_b[:, 1] / IMG_H], dim=-1)
 
     from src.flow_model import sinusoidal_time_embed
-    g_t = torch.randn(n, 8, device=device) * NOISE_TEMP
+    g_t = torch.randn(n, G_DIM, device=device) * NOISE_TEMP
     dt = 1.0 / steps
     for k in range(steps):
         t_val = k * dt
@@ -213,9 +237,31 @@ def flow_sample(depth_np, uv_np, n=N_SAMPLES, steps=N_EULER_STEPS,
     return g_1
 
 
+def _gram_schmidt_to_R(r6):
+    a1, a2 = r6[:3], r6[3:]
+    b1 = a1 / (np.linalg.norm(a1) + 1e-9)
+    b2 = a2 - (b1 @ a2) * b1
+    b2 = b2 / (np.linalg.norm(b2) + 1e-9)
+    b3 = np.cross(b1, b2)
+    return np.column_stack([b1, b2, b3])
+
+
 def g8_to_components(g):
-    """g: (8,) → (pos(3), approach_unit(3), yaw)"""
+    """g: (g_dim,) → (pos(3), approach_unit(3), yaw).
+    Auto-dispatch on G_DIM (8 = approach_yaw, 9 = Zhou 6D)."""
     pos = g[:3]
+    if G_DIM == 9:
+        R = _gram_schmidt_to_R(g[3:9])  # Tool X = R[:,0], Y = R[:,1], Z = R[:,2]
+        app = R[:, 2]
+        # extract yaw from R using same convention as _yaw_from_Rtool
+        a = app
+        ref = np.array([1.0, 0, 0]) if abs(a[0]) < 0.95 else np.array([0, 1.0, 0])
+        b0 = ref - (ref @ a) * a; b0 /= np.linalg.norm(b0) + 1e-9
+        n0 = np.cross(a, b0)
+        b_actual = R[:, 1]
+        yaw = math.atan2(b_actual @ n0, b_actual @ b0)
+        return pos, app, yaw
+    # 8D
     app = g[3:6]
     app = app / (np.linalg.norm(app) + 1e-9)
     yaw = math.atan2(g[6], g[7])

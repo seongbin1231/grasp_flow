@@ -97,3 +97,21 @@ Thumbs.db
 *.log
 *.tmp
 .cache/
+
+# deploy4/, deploy5/ (zhou_9d depth/PC viz, ablation)
+deploy4/onnx/*.onnx
+deploy4/yolo/*.onnx
+deploy4/yolo/*.pt
+deploy4/viz/*.html
+deploy4/viz/live/*.html
+deploy4/viz/gt/*.html
+deploy4/viz/gt_policy/*.html
+deploy4/viz/icp/*.html
+deploy5/onnx/*.onnx
+deploy5/yolo/*.onnx
+deploy5/yolo/*.pt
+deploy5/viz/*.html
+deploy5/viz/live/*.html
+deploy5/viz/gt/*.html
+deploy5/viz/gt_policy/*.html
+deploy5/viz/icp/*.html

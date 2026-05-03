@@ -1,6 +1,6 @@
 ---
 name: yolo-grasp-orchestrator
-description: "YOLO_Grasp 프로젝트의 **6-DoF SE(3) Conditional Flow Matching grasp** 예측 모델 + 논문화 (IEEE 급) 작업의 7인 에이전트 팀 오케스트레이터. 1280×720 카메라 프레임 전용 파이프라인. 데이터/YOLO/ICP/Grasp v4/Dataset v2/v7_v4policy_big 학습/ONNX 배포/Direct MLP baseline/paper figure+table 모두 완료. YOLO_Grasp · grasp 모델 · 파지자세 예측 · Simulink 데이터 파이프라인 · ONNX 배포 · **논문 figure/table 생성 · ablation · 모델 architecture 업그레이드 (v8 cross-attn)** 작업 시 반드시 사용. 후속 작업(재실행, 부분 수정, threshold 조정, 재학습, 데이터 추가, 배포 재검증, 이전 결과 개선, 논문 그림 갱신, 메트릭 재계산)도 이 스킬을 사용."
+description: "YOLO_Grasp 프로젝트의 **6-DoF SE(3) Conditional Flow Matching grasp** 예측 모델 + IEEE 급 논문화 작업의 7인 에이전트 팀 오케스트레이터. 1280×720 카메라 프레임 전용. 데이터/YOLO/ICP/Grasp v4/Dataset v2 완료, **zhou_9d_full_250ep (9D Zhou, val 0.2419)** 가 최종 production 후보 (v7 8D 0.3676 대비 −34%), v7 deploy2 도 병존. **8D vs 9D + depth vs PC 두 ablation 완료**, Direct MLP baseline + Fig 1/2/3 + Table 1 완료. YOLO_Grasp · grasp 모델 · 파지자세 예측 · Simulink 데이터 파이프라인 · ONNX 배포 · **회전 표현 ablation (8D approach_yaw vs 9D Zhou) · 입력 표현 ablation (depth vs PC) · 논문 figure/table 생성 · 모델 architecture 업그레이드 (v8 cross-attn, v9 PC-only)** 작업 시 반드시 사용. 후속 작업(재실행, 부분 수정, threshold 조정, 재학습, 데이터 추가, 배포 재검증, 이전 결과 개선, 논문 그림 갱신, 메트릭 재계산, ONNX deploy3 export, Zhou19 인용)도 이 스킬을 사용."
 ---
 
 # YOLO_Grasp Orchestrator — 7인 팀 조율 (모델 + 논문화)
@@ -34,17 +34,23 @@ description: "YOLO_Grasp 프로젝트의 **6-DoF SE(3) Conditional Flow Matching
 | 4. ICP v3 (mask_px p10 + fitness 0.30 + rmse 3mm) | ✅ | `img_dataset/icp_cache/poses.h5` (**2,485 stable**) |
 | 5. Grasp v4 합성 (3-layer + tilt + exclusion) | ✅ | `img_dataset/grasp_cache/grasps.h5` (**40,984 grasps**) |
 | 6. Dataset v2 통합 (cube 4→1, scene split) | ✅ | `datasets/grasp_v2.h5` (train 33,744 / val 7,240 rows) |
-| 7. Flow Matching 학습 v7_v4policy_big | ✅ | `runs/yolograsp_v2/v7_v4policy_big/.../best.pt` (ep226, **val_flow=0.3676**, 35.28M params) |
+| 7. Flow Matching 학습 v7_v4policy_big (8D, 배포 중) | ✅ | `runs/yolograsp_v2/v7_v4policy_big/.../best.pt` (ep226, val_flow=0.3676, 35.28M params) |
 | 8. ONNX export (encoder + velocity 분리) | ✅ | `deploy2/onnx/` (139MB velocity, round-trip 5.96e-06) |
 | 9. MATLAB YOLO ONNX | ✅ | `deploy2/yolo/yolov8m_seg_1280.onnx` |
 | 10. Viz / live ROS | ✅ | `deploy2/viz/{index.html,gt_policy/,icp/,live/}` |
 | 11. **Direct MLP baseline** (Ablation) | ✅ | `runs/yolograsp_v2/v7_direct_mlp_big/.../best.pt` (ep58, val_grasp=0.1118, 26M params) |
 | 12. **Paper figures + Table 1** | ✅ | `paper_figs/fig{1,2,3}_*.{png,pdf}` + `table1.{md,json}` |
-| 13. **v8 architecture sweep** | 🔄 **학습 중** | `runs/yolograsp_v2/v8_sweep/full/...` (wandb `kmga5yij`, 50ep ~2h) |
+| 13. **8D vs 9D Zhou ablation** (50ep) | ✅ | val 0.3623 vs 0.2786 → **9D 채택 (−23%)** |
+| 14. **zhou_9d depth full 250ep** (NEW BEST) | ✅ | `runs/yolograsp_v2/zhou_9d_full_250ep/.../best.pt` (ep250, **val_flow=0.2419**, 14.8M params, 9D Zhou) |
+| 15. **PC-only 250ep** (Ablation) | ✅ | `runs/.../zhou_9d_pc_only_full_250ep/.../best.pt` (ep242, val=0.2748, depth 대비 −13.6% 열세) |
+| 16. **deploy3/4 시각화** | ✅ | `deploy3/viz/` (depth 250ep) + `deploy4/viz/` (PC 250ep) |
+| 17. **ONNX export → deploy3** (zhou_9d 9D) | ⏳ pending | 새 production candidate. Table 1/Fig 3 도 9D 모델로 갱신 예정 |
 
-**현재 초점**: v8 sweep 결과 (ep50 val_flow vs 0.42 임계값) → 통과 시 250ep full + ONNX deploy3, 실패 시 ablation 또는 stratified noise 만 적용.
+**현재 초점**: zhou_9d_full_250ep (val 0.2419, 9D Zhou, depth) 가 **최종 production 후보**. v7 deploy2 대비 −34%. 다음: (1) ONNX export → deploy3, (2) Table 1 + Fig 3 9D 모델로 갱신, (3) 8D vs 9D + depth vs PC ablation 표 논문에 추가.
 
-**v8 변경 요약**: A1 (Cross-Attn 1-query × 12 block) + A2 (Multi-Scale Local Crop 96/192/384) + scale_dropout 0.5 + weight_decay 0.05 + warmup 0.06. **Loss/Sampler/Aug 모두 v7 동일**. Params 35.28M → 83.54M. PixArt-α / PointNet++ MSG / DiT 인용.
+**핵심 ablation 결정 (2026-05-01~03)**:
+- **회전 표현**: 8D approach_yaw → **9D Zhou 6D** (−34%, Zhou19 CVPR 인용)
+- **입력 표현**: PC token → **depth raster + (u,v)** (−13.6%, small-data 친화)
 
 ## 🏆 핵심 정량 결과 (val 400 obj)
 
@@ -72,11 +78,12 @@ threshold 5cm/30° (Sundermeyer ICRA 2021), COV (Achlioptas ICML 2018). 상세: 
 ## 🧠 모델 아키텍처 (확정)
 
 **Conditional Rectified Flow (Flow Matching)** — 다봉 분포 샘플링으로 여러 후보 grasp 생성 + 충돌 필터로 선택.
-- 학습 공간: `g = (x, y, z, a_x, a_y, a_z, sin_yaw, cos_yaw)` 8D
-- Loss: `‖v_θ(g_t, t, c) − (g_1 − g_0)‖²`
-- 추론: Reflow 1-step, N=32~64 병렬 샘플
+- **학습 공간 (현 production 후보)**: `g = (x, y, z, R00, R10, R20, R01, R11, R21)` **9D Zhou 6D** (`--rot_repr zhou6d`). 추론 후 Gram-Schmidt 로 SO(3) 복원 → quat. Legacy 8D 도 `--rot_repr approach_yaw` 로 호환 (deploy2/v7 가 이거 사용 중)
+- **입력 분기**: depth+uv (`FlowGraspNet`, 기본) vs PC (`FlowGraspNetPC`, `--use_pc_only`, 별도 클래스). depth 가 13.6% 우세 — production 은 depth
+- Loss: `‖v_θ(g_t, t, c) − (g_1 − g_0)‖²` + symmetric_min_loss (lying 180°)
+- 추론: Reflow 1-step, N=32 병렬 샘플
 - ONNX: velocity MLP만 export. MATLAB이 노이즈 생성, Euler step, 충돌 필터, CameraTform 수행
-- 참조: `/home/robotics/Competition/grasp_model/graspflow/` (SE(3) 구현체, 우리는 8D 파라미터화로 단순화)
+- 참조: `/home/robotics/Competition/grasp_model/graspflow/` (SE(3) 구현체, 우리는 9D Zhou 로 단순화)
 
 ## 에이전트 구성 (7인)
 
@@ -87,7 +94,7 @@ threshold 5cm/30° (Sundermeyer ICRA 2021), COV (Achlioptas ICML 2018). 상세: 
 | icp-labeler | custom | open3d multi-scale ICP, 카메라 프레임 pose | `/icp-quality-management` | `icp_cache/poses.h5` (2,485 stable) |
 | grasp-synthesizer | custom | **6-DoF SE(3) grasp 정책 v4** 합성 | `/top-down-grasp-synthesis` | `grasp_cache/grasps.h5` (40,984) |
 | dataset-curator | custom | HDF5 v2 통합 + cube 통합 + QA | `/hdf5-dataset-management` | `datasets/grasp_v2.h5` |
-| model-engineer | custom | Flow Matching 학습 + ONNX + MATLAB + **Direct MLP baseline + v8 architecture 업그레이드** | `/depth-uv-grasp-training`, `/onnx-matlab-integration` | `runs/yolograsp_v2/{v7_v4policy_big, v7_direct_mlp_big}/` + `deploy2/` |
+| model-engineer | custom | Flow Matching 학습 + ONNX + MATLAB + **Direct MLP baseline + v8 cross-attn + v9 PC-only + 8D vs 9D Zhou + depth vs PC ablation** | `/depth-uv-grasp-training`, `/onnx-matlab-integration` | `runs/yolograsp_v2/{v7_v4policy_big, v7_direct_mlp_big, zhou_9d_full_250ep, zhou_9d_pc_only_full_250ep}/` + `deploy2/`(8D v7) + `deploy3/`(9D zhou pending) |
 | **paper-figure-author** | **custom (NEW)** | 논문 figure (mathtext, RGB-색칠 PC, mode-balance) + Table 1 (COV/APD/MAE) + 본문 표현 | (직접 `scripts/make_paper_*.py`) | `paper_figs/fig{1,2,3}_*.{png,pdf}` + `table1.{md,json}` |
 
 ## 데이터 흐름

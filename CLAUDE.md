@@ -29,6 +29,8 @@ Depth 이미지 + 픽셀 (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx
 | 좌표 프레임 | **카메라 프레임 전용**. Base 변환은 MATLAB 런타임에서 `CameraTform`으로 처리 |
 | Cube 클래스 | 하류(ICP·grasp·학습)에서 `cube_blue/green/p/red` 4종을 `cube` 1종으로 통합 |
 | Grasp 표현 | **6-DoF SE(3) 7D `[x,y,z, qw,qx,qy,qz]`** (4-DoF `[x,y,z,yaw]` 폐기, 2026-04-19) |
+| 학습 회전 표현 | **9D Zhou 6D rotation** (3 pos + R[:,0:2] flatten 6) — `--rot_repr zhou6d` (2026-05-01 확정). 8D approach+yaw 대비 val_flow −34%. Zhou et al. CVPR 2019 인용 |
+| 최종 production 모델 | **zhou_9d_full_250ep** depth+uv → 9D Zhou, h768/nb8 14.8M, val_flow **0.2419** (v7 0.3676 대비 −34%) |
 
 ## Grasp 정책 v4 (2026-04-22 최종, 6dof-v4)
 
@@ -108,3 +110,11 @@ Depth 이미지 + 픽셀 (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx
 | 2026-04-27 | **Harness plugin 업데이트** | ~/.claude/plugins/cache/harness-marketplace/harness/1.2.0 | commit 3bfc442 → 6400bf6 (CHANGELOG [1.2.1]). 기능 변경: rerun 시 `_workspace/` 보관·재생성 절차 명시 (orchestrator-template.md). installed_plugins.json SHA 갱신 |
 | 2026-04-27 | **Standing mode collapse 진단** | scripts/diagnose_standing_bias.py | v7 추론 standing bottle 5 case × N=64: top **14%** / side **67%** (GT 33/33/33). CFG=0 → top 75%, CFG=2.5 → top 17% (mode swap). 근본 원인 3개 + 수정안 5개 (1순위 stratified noise) 도출 |
 | 2026-04-27 | **v8 모델 설계 + sweep 학습 시작** | src/flow_model.py, scripts/train_flow.py, scripts/sweep_v8.yaml, scripts/sweep_v8_trial.py | A1 (1-query Cross-Attn × 12, PixArt-α/Hunyuan-DiT/GenTron 선례) + A2 (Multi-Scale Local Crop 96/192/384, PointNet++ MSG 동형) + scale_dropout 0.5 + weight_decay 0.05 + warmup 0.06. **Loss/Sampler/Aug 변경 없음**. Params 35.28M → 83.54M. wandb sweep `kmga5yij` 50ep (~2h). Loss 함수·sampler·augmentation 모두 v7 와 동일 |
+| 2026-05-01 | **8D vs 9D 회전 표현 비교 학습** | scripts/verify_grasp_repr.py (신규), src/flow_dataset.py (`--rot_repr` 인자), scripts/train_flow.py (`g_dim` 자동), src/flow_model.py (FlowGraspNet의 `g_dim` arg 활용) | 50ep 동일 조건: **8D approach_yaw val 0.3623 vs 9D Zhou 0.2786 → −23%**. dataset round-trip 검증 8D max err 3e-7, 9D max err 1.7e-7 통과. edge case (\|a_x\|>0.93) 1.1% 카운트. 9D 채택 결정 |
+| 2026-05-01 | **v9 PC-only 분기 추가** | src/flow_model.py (`FlowGraspNetPC` 신규 클래스), scripts/train_flow.py (`--use_pc_only`) | depth → 4096 PC 전면 교체 실험. anchor 3D + multi-scale ball-query (r=0.05/0.10/0.20) + MiniPointNet (Conv1d×3 maxpool, ONNX-safe). 기존 FlowGraspNet 코드 유지 (별도 클래스). LDG-6DoF / GraspGen 식 PC-token cross-attn 구조와 유사 |
+| 2026-05-01 | **v9 PC-only sweep (3 trial × 30ep)** | scripts/sweep_pc_v9.yaml, scripts/sweep_pc_v9_trial.py, runs/.../zhou_9d_pc_sweep/{A,B,C}/ | wandb sweep `h29on2vn`. A(xattn ON 35M) val 0.3361, **B(xattn OFF 19.5M) val 0.3176** ⭐, C(xattn OFF 7M) val 0.3204. 가설 검증: small-data (40K)에서 cross-attn overcap → OFF 가 우세. depth 0.2786 와 14% 격차 |
+| 2026-05-01 | **PC-B continue warm-start 30ep** | scripts/run_pc_B_continue_30ep.sh, runs/.../zhou_9d_pc_sweep/B_continue_30ep/ | best.pt → fresh cosine 30ep. val 0.3176 → **0.3078 (−3.1%)**. 누적 60ep |
+| 2026-05-01 | **zhou_9d depth full 250ep 학습** | scripts/run_zhou9d_full_250ep.sh, runs/yolograsp_v2/zhou_9d_full_250ep/.../best.pt | h768/nb8 14.8M, 9시간 27분. **best ep250 val_flow=0.2419** (v7 8D 250ep 0.3676 대비 −34%, 50ep 0.2786 대비 −13% 추가). 모드별: lying 0.163 / standing 0.669 / cube 0.645. **현 시점 production 후보 1순위** |
+| 2026-05-01 | **zhou_9d PC-only full 250ep 학습** | scripts/run_pc_full_250ep.sh, runs/yolograsp_v2/zhou_9d_pc_only_full_250ep/.../best.pt | h768/nb8 19.5M, 9시간. **best ep242 val_flow=0.2748** (60ep 0.3078 대비 −10.7%). 모드별: lying 0.175 / standing 0.834 / cube 0.667. depth(0.2419) 와 −13.6% 격차 유지 → **PC 가 small-data + camera-fixed 환경에서 depth 보다 열세** 정량 결론 |
+| 2026-05-01 | **deploy3/viz + deploy4/viz 시각화** | deploy3/viz/ (depth 250ep), deploy4/viz/ (PC 250ep) | 7 카테고리 × 2 scene HTML. depth 437/448 kept (97.5%), PC 420/448 kept (93.8%). standing 모드에서 depth 우세 명확, lying은 거의 동등, lying_marker scene2 에서 PC 가 4.5cm → 2.1cm 개선 (예외) |
+| 2026-05-03 | **논문 Zhou19 대표 인용 결정** | (paper) | "On the Continuity of Rotation Representations in Neural Networks", Zhou et al. CVPR 2019 (arXiv 1812.07035, 3000+ 인용). 회전 표현 ablation 의 1순위 인용. 보조: Diffusion Policy (Chi RSS 2023), GraspGen (2025) |

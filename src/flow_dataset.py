@@ -157,7 +157,8 @@ class GraspDataset(Dataset):
                  yaw_aug: bool = True, uv_jitter_px: float = 3.0,
                  depth_noise_mm: float = 1.5, erase_prob: float = 0.5,
                  grasp_jitter_yaw_deg: float = 2.0, grasp_jitter_xyz_mm: float = 2.0,
-                 preload_depth: bool = True, normalize_pos: bool = True):
+                 preload_depth: bool = True, normalize_pos: bool = True,
+                 rot_repr: str = "approach_yaw"):
         self.h5_path = h5_path
         self.split = split
         self.augment = augment
@@ -168,6 +169,10 @@ class GraspDataset(Dataset):
         self.jit_yaw = math.radians(grasp_jitter_yaw_deg)
         self.jit_xyz = grasp_jitter_xyz_mm / 1000.0
         self.normalize_pos = normalize_pos
+        if rot_repr not in ("approach_yaw", "zhou6d"):
+            raise ValueError(f"rot_repr must be 'approach_yaw' or 'zhou6d', got {rot_repr}")
+        self.rot_repr = rot_repr
+        self.g_dim = 8 if rot_repr == "approach_yaw" else 9
 
         with h5py.File(h5_path, "r") as f:
             g = f[split]
@@ -247,25 +252,37 @@ class GraspDataset(Dataset):
         if self.augment and self.jit_xyz > 0:
             pos = pos + np.random.uniform(-self.jit_xyz, self.jit_xyz, 3)
 
-        # build 8D parameterization
+        # build grasp parameterization (8D approach_yaw or 9D Zhou 6D)
         app_u = app / (np.linalg.norm(app) + 1e-9)
         pos_out = pos.astype(np.float32)
         if self.normalize_pos:
             pos_out = (pos_out - self.pos_mean) / self.pos_std
-        sin_yaw = math.sin(yaw)
-        cos_yaw = math.cos(yaw)
-        g1 = np.concatenate([pos_out,
-                             app_u.astype(np.float32),
-                             np.array([sin_yaw, cos_yaw], dtype=np.float32)])
-        # symmetric alternative for lying: yaw+π (same pos, same approach, flipped sincos)
-        # lying mode (id=0) has 180° yaw pairs at same position in GT
         mode_i = int(self.mode[i])
-        if mode_i == 0:
-            g1_alt = np.concatenate([pos_out,
-                                     app_u.astype(np.float32),
-                                     np.array([-sin_yaw, -cos_yaw], dtype=np.float32)])
+
+        if self.rot_repr == "zhou6d":
+            # 9D = pos(3) + R[:,0](3) + R[:,1](3) flattened (Zhou 2019)
+            R_tool = _build_R_tool(app_u, yaw)
+            r6 = np.concatenate([R_tool[:, 0], R_tool[:, 1]]).astype(np.float32)
+            g1 = np.concatenate([pos_out, r6])
+            if mode_i == 0:
+                # lying 180° = R · Rz(π) ≡ flip first two columns (verified)
+                r6_alt = np.concatenate([-R_tool[:, 0], -R_tool[:, 1]]).astype(np.float32)
+                g1_alt = np.concatenate([pos_out, r6_alt])
+            else:
+                g1_alt = g1.copy()
         else:
-            g1_alt = g1.copy()
+            # 8D = pos(3) + approach_unit(3) + (sin yaw, cos yaw)(2)
+            sin_yaw = math.sin(yaw)
+            cos_yaw = math.cos(yaw)
+            g1 = np.concatenate([pos_out,
+                                 app_u.astype(np.float32),
+                                 np.array([sin_yaw, cos_yaw], dtype=np.float32)])
+            if mode_i == 0:
+                g1_alt = np.concatenate([pos_out,
+                                         app_u.astype(np.float32),
+                                         np.array([-sin_yaw, -cos_yaw], dtype=np.float32)])
+            else:
+                g1_alt = g1.copy()
 
         return {
             "depth": torch.from_numpy(depth).float().unsqueeze(0),  # (1, H, W)

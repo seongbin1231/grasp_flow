@@ -1,0 +1,51 @@
+# Wandb sweep — v9 PC-only (depth → PC encoder 전면 교체)
+#
+# 목적: PC-only 모델의 cross-attn ON/OFF + capacity 조합 비교.
+# 가설:
+#   - small-data (40K) + cross-attn = overcapacity → xattn OFF 가 더 좋을 가능성
+#   - capacity 가 너무 크면 underfit → smaller (512/6) 가 fair vs depth (14.8M)
+#
+# 통과 기준: best val_flow @ ep30 < 0.30 (v8 zhou depth 0.279 근접)
+#
+# 시간: 3 trial × 30 epoch ≈ 2.5~3 시간
+
+program: scripts/sweep_pc_v9_trial.py
+method: grid
+metric:
+  name: val_flow_loss
+  goal: minimize
+
+parameters:
+  variant:
+    values:
+      - A_xattn_on_768_8     # baseline reproduction (현재 35.57M model, val 0.336)
+      - B_xattn_off_768_8    # cross-attn 효과 분리 (~14.8M, fair vs depth)
+      - C_xattn_off_512_6    # smaller capacity (~7M, underfit 회피)
+  epochs:
+    value: 30
+  batch_size:
+    value: 16
+  lr:
+    value: 0.001
+  weight_decay:
+    value: 0.0001
+  warmup_frac:
+    value: 0.04
+  ema_decay:
+    value: 0.9998
+  cond_dropout:
+    value: 0.2
+  rot_loss_weight:
+    value: 2.0
+  marker_boost:
+    value: 1.5
+  spam_boost:
+    value: 2.5
+  seed:
+    value: 42
+
+command:
+  - ${env}
+  - /home/robotics/anaconda3/bin/python
+  - ${program}
+  - ${args}

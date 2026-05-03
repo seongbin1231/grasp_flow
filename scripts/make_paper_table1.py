@@ -98,7 +98,7 @@ def compute_metrics(pred_8d, gt_grasps_7d, gt_groups, pos_mean, pos_std):
     Returns:
       pos_mae(cm)   — pred-side: 각 pred 의 nearest GT 까지 평균 위치 오차
       ang_err(deg)  — pred-side: 각 pred 의 nearest GT 와의 approach 각도 오차
-      coverage(%)   — GT-side: GT group 중 (pos<5cm & ang<30°) 인 pred 가 하나 이상인 비율 [Achlioptas ICML 2018]
+      coverage(%)   — GT-side: GT group 중 (pos<5cm & ang<30°) 인 pred 가 하나 이상인 비율 (coverage formulation inspired by Achlioptas et al., ICML 2018; the 5cm/30° SE(3) matching threshold is our choice for parallel-jaw grasps)
       apd(cm)       — Average Pairwise Distance: 예측들 간 평균 쌍별 위치 거리 (다양성)
     """
     pred = pred_8d.copy()
@@ -258,7 +258,7 @@ def main():
             md += (f"| {mode} | {label} | {s['n']} | {s['mean_groups_in_gt']:.2f} | "
                    f"{s['pos_mae_cm']:.2f} | {s['ang_err_deg']:.2f} | "
                    f"{s['mode_coverage_pct']:.1f} | {s['apd_cm']:.2f} |\n")
-    md += "\n_COV = Coverage [Achlioptas, ICML 2018]. APD = Average Pairwise Distance among predictions (diversity)._\n"
+    md += "\n_COV = Coverage (formulation inspired by Achlioptas et al., ICML 2018; 5cm/30° SE(3) matching threshold ours). APD = Average Pairwise Distance among predictions (diversity)._\n"
     (OUT / "table1.md").write_text(md)
 
     print("\n=== Table 1 ===")
