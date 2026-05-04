@@ -11,6 +11,7 @@
 from __future__ import annotations
 from pathlib import Path
 import argparse
+import math
 import sys
 import matplotlib
 matplotlib.use("Agg")
@@ -39,7 +40,7 @@ GRIPPER_HALF = 0.0425 * 0.65
 FINGER_LEN = 0.040 * 0.65
 PALM_BACK = 0.025 * 0.65
 
-FLOW_CKPT = ROOT / "runs/yolograsp_v2/v7_v4policy_big/adaln_zero_lr0.001_nb12_h1024/checkpoints/best.pt"
+FLOW_CKPT = ROOT / "runs/yolograsp_v2/zhou_9d_full_250ep/adaln_zero_lr0.001_nb8_h768/checkpoints/best.pt"
 DIRECT_CKPT = ROOT / "runs/yolograsp_v2/v7_direct_mlp_big/direct_mlp_lr0.001_nb12_h1024/checkpoints/best.pt"
 
 # (label, sid, obj_idx, ply_file, elev, azim)
@@ -50,10 +51,10 @@ CASES = [
 ]
 
 N_SAMPLES = 16            # 최종 표시 개수
-N_OVERSAMPLE = 48         # 필터·밸런스 위해 우선 많이 뽑음
+N_OVERSAMPLE = 128        # CFG 3.5 분포 좁아짐 보완 — 후보 풍부히
 T_EULER = 32
 NOISE_TEMP = 0.8
-CFG_W = 2.5               # 3.5 → 2.5: side 과증폭 / lying outlier 억제
+CFG_W = 1.0               # CFG sweep 진단 결과: GT 33:33:33 에 가장 근접 (top 34% s45 47% cap 19%) — Fig 3 권장값
 DIRECT_UV_JITTER_PX = 2.0
 DIST_THRESH_BY_MODE = {   # 객체 중심에서 멀리 벗어난 grasp 제거 (mode 별)
     "standing": 0.10,
@@ -62,6 +63,10 @@ DIST_THRESH_BY_MODE = {   # 객체 중심에서 멀리 벗어난 grasp 제거 (m
     "default":  0.10,
 }
 SEED = 7                  # 재현성
+
+# Typography (paper readable size)
+TITLE_FS = 22             # subplot title (was 15)
+TITLE_PAD = 8
 
 
 def parse_args():
@@ -102,7 +107,58 @@ def load_ply(name):
     return pts
 
 
+def _gram_schmidt_to_R(r6):
+    """Zhou 2019: r6 = [a1(3), a2(3)] → R 3x3. Tool X=R[:,0], Y=R[:,1], Z=R[:,2]."""
+    a1, a2 = r6[:3], r6[3:]
+    b1 = a1 / (np.linalg.norm(a1) + 1e-9)
+    b2 = a2 - (b1 @ a2) * b1
+    b2 = b2 / (np.linalg.norm(b2) + 1e-9)
+    b3 = np.cross(b1, b2)
+    return np.column_stack([b1, b2, b3])
+
+
+def _R_to_quat_wxyz(R):
+    tr = R.trace()
+    if tr > 0:
+        s = np.sqrt(tr + 1.0) * 2
+        qw = 0.25 * s; qx = (R[2,1]-R[1,2])/s; qy = (R[0,2]-R[2,0])/s; qz = (R[1,0]-R[0,1])/s
+    elif R[0,0] > R[1,1] and R[0,0] > R[2,2]:
+        s = np.sqrt(1+R[0,0]-R[1,1]-R[2,2])*2
+        qw=(R[2,1]-R[1,2])/s; qx=0.25*s; qy=(R[0,1]+R[1,0])/s; qz=(R[0,2]+R[2,0])/s
+    elif R[1,1] > R[2,2]:
+        s = np.sqrt(1+R[1,1]-R[0,0]-R[2,2])*2
+        qw=(R[0,2]-R[2,0])/s; qx=(R[0,1]+R[1,0])/s; qy=0.25*s; qz=(R[1,2]+R[2,1])/s
+    else:
+        s = np.sqrt(1+R[2,2]-R[0,0]-R[1,1])*2
+        qw=(R[1,0]-R[0,1])/s; qx=(R[0,2]+R[2,0])/s; qy=(R[1,2]+R[2,1])/s; qz=0.25*s
+    q = np.array([qw, qx, qy, qz])
+    if q[0] < 0: q = -q
+    q /= np.linalg.norm(q)
+    return q
+
+
+def grasp_to_pose7(g, g_dim=8):
+    """8D approach_yaw or 9D Zhou 6D → 7D [pos, quat_wxyz]."""
+    pos = g[:3]
+    if g_dim == 9:
+        R = _gram_schmidt_to_R(g[3:9])
+        return np.concatenate([pos, _R_to_quat_wxyz(R)])
+    # 8D path
+    app = g[3:6] / (np.linalg.norm(g[3:6]) + 1e-9)
+    yaw = np.arctan2(g[6], g[7])
+    ref = np.array([1.0, 0, 0]) if abs(app[0]) < 0.95 else np.array([0, 1, 0])
+    b0 = ref - (ref @ app) * app
+    b0 /= np.linalg.norm(b0) + 1e-9
+    n0 = np.cross(app, b0)
+    b = b0 * np.cos(yaw) + n0 * np.sin(yaw)
+    b /= np.linalg.norm(b) + 1e-9
+    x = np.cross(b, app)
+    R = np.column_stack([x, b, app])
+    return np.concatenate([pos, _R_to_quat_wxyz(R)])
+
+
 def grasp_8d_to_pose7(g8):
+    """Backward-compat wrapper (8D only)."""
     pos = g8[:3]
     app = g8[3:6] / (np.linalg.norm(g8[3:6]) + 1e-9)
     yaw = np.arctan2(g8[6], g8[7])
@@ -154,7 +210,7 @@ def gripper_segs(pos, q):
 
 def render(ax, scene_pts, scene_rgb, ply_pts, R_obj, t_obj,
            grasps_8d, grasp_color, pos_mean, pos_std,
-           elev, azim):
+           elev, azim, g_dim=8):
     obj_pts = (ply_pts @ R_obj.T) + t_obj
 
     if len(scene_pts) > 1500:
@@ -175,7 +231,7 @@ def render(ax, scene_pts, scene_rgb, ply_pts, R_obj, t_obj,
     for g8 in grasps_8d:
         g8 = g8.copy()
         g8[:3] = g8[:3] * pos_std + pos_mean
-        pose7 = grasp_8d_to_pose7(g8)
+        pose7 = grasp_to_pose7(g8, g_dim=g_dim)
         for a, b in gripper_segs(pose7[:3], pose7[3:7]):
             ax.plot([a[0], b[0]], [a[1], b[1]], [a[2], b[2]],
                     color=grasp_color, lw=1.8, alpha=1.0, zorder=10)
@@ -199,7 +255,7 @@ def render(ax, scene_pts, scene_rgb, ply_pts, R_obj, t_obj,
 
 
 @torch.no_grad()
-def infer_flow(model, depth, uv, n=16, t_steps=32, temp=0.8, w_cfg=3.0, seed=None):
+def infer_flow(model, depth, uv, n=16, t_steps=32, temp=0.8, w_cfg=3.0, seed=None, g_dim=8):
     """CFG: cond_dropout 학습 일관성을 위해 cond 벡터 자체를 zero out (depth zero 가 아님)."""
     from src.flow_model import sinusoidal_time_embed, IMG_W as W, IMG_H as H
     device = next(model.parameters()).device
@@ -212,7 +268,7 @@ def infer_flow(model, depth, uv, n=16, t_steps=32, temp=0.8, w_cfg=3.0, seed=Non
     cond_on = model.encode(d_b, u_b)
     cond_off = torch.zeros_like(cond_on)
     uv_norm = torch.stack([u_b[:, 0] / W, u_b[:, 1] / H], dim=-1)
-    g_t = torch.randn(n, 8, device=device) * temp
+    g_t = torch.randn(n, g_dim, device=device) * temp
     for k in range(t_steps):
         t = torch.full((n,), k / t_steps, device=device)
         t_emb = sinusoidal_time_embed(t, dim=64)
@@ -223,36 +279,144 @@ def infer_flow(model, depth, uv, n=16, t_steps=32, temp=0.8, w_cfg=3.0, seed=Non
     return g_t.cpu().numpy()
 
 
-def filter_and_balance(g_8d, pos_mean, pos_std, obj_center,
-                       dist_thresh_m, n_keep, mode="default"):
-    """객체 중심 distance 필터 + (standing 한정) top-down/side 균형 sub-sampling.
+def _approach_from_g(g, g_dim):
+    """approach 벡터(unit) 추출 — 8D는 g[3:6], 9D는 R[:,2]=cross(b1,b2)."""
+    if g_dim == 9:
+        apps = []
+        for row in g:
+            R = _gram_schmidt_to_R(row[3:9])
+            apps.append(R[:, 2])
+        return np.stack(apps, axis=0)
+    a = g[:, 3:6]
+    return a / (np.linalg.norm(a, axis=1, keepdims=True) + 1e-9)
 
-    입력/출력 모두 정규화된 8D (render 가 다시 denormalize 함).
-    필터 판정은 denormalized pos 로만 수행.
+
+def _open_dir_from_g(g, g_dim):
+    """gripper open(=R[:,1]) 방향 추출. 8D는 _build_R_tool 로 복원."""
+    if g_dim == 9:
+        opens = []
+        for row in g:
+            R = _gram_schmidt_to_R(row[3:9])
+            opens.append(R[:, 1])
+        return np.stack(opens, axis=0)
+    # 8D
+    opens = []
+    for row in g:
+        a = row[3:6] / (np.linalg.norm(row[3:6]) + 1e-9)
+        yaw = math.atan2(row[6], row[7])
+        ref = np.array([1.0, 0, 0]) if abs(a[0]) < 0.95 else np.array([0, 1.0, 0])
+        b0 = ref - (ref @ a) * a; b0 /= np.linalg.norm(b0) + 1e-9
+        n0 = np.cross(a, b0)
+        b = b0 * math.cos(yaw) + n0 * math.sin(yaw)
+        b /= np.linalg.norm(b) + 1e-9
+        opens.append(b)
+    return np.stack(opens, axis=0)
+
+
+def _pick_evenly_spaced(idx_sorted, n_target):
+    """sorted 인덱스 배열에서 균등 간격 n_target 개 선택."""
+    if len(idx_sorted) <= n_target:
+        return idx_sorted
+    pos = np.linspace(0, len(idx_sorted) - 1, n_target).round().astype(int)
+    return idx_sorted[pos]
+
+
+def filter_and_balance(g_8d, pos_mean, pos_std, obj_center,
+                       dist_thresh_m, n_keep, mode="default", g_dim=8,
+                       scene_pts=None):
+    """객체 중심 distance 필터 + mode 별 적극적 균형 sub-sampling.
+
+    standing: |a_z| 3-way bin (top/side-45/side-cap) 균등
+    lying:    위치 PCA 첫 축 균등 sampling (긴축 따라 골고루)
+    cube:     yaw 2-way bin (R[:,1] 방향 90° 갈음)
     """
     pos_dn = g_8d[:, :3] * pos_std + pos_mean
-    app = g_8d[:, 3:6] / (np.linalg.norm(g_8d[:, 3:6], axis=1, keepdims=True) + 1e-9)
+    app = _approach_from_g(g_8d, g_dim)
     dist = np.linalg.norm(pos_dn - obj_center, axis=1)
     keep_idx = np.where(dist < dist_thresh_m)[0]
     if len(keep_idx) == 0:
-        order = np.argsort(dist)[:n_keep]      # fallback: 가장 가까운 N
+        order = np.argsort(dist)[:n_keep]
         return g_8d[order]
 
-    g_f = g_8d[keep_idx]; app_f = app[keep_idx]
+    g_f = g_8d[keep_idx]
+    pos_f = pos_dn[keep_idx]
+    app_f = app[keep_idx]
 
     if mode == "standing" and len(g_f) > n_keep:
-        is_top = np.abs(app_f[:, 2]) > 0.6
-        idx_top = np.where(is_top)[0]
-        idx_side = np.where(~is_top)[0]
-        # 12 top + 4 side (top-down 노출 강화)
-        n_top_target = max(n_keep - 4, n_keep * 3 // 4)
-        sel_top = idx_top[:n_top_target]
-        sel_side = idx_side[:n_keep - len(sel_top)]
-        if len(sel_top) + len(sel_side) < n_keep:
-            extra = idx_top[len(sel_top):len(sel_top) + (n_keep - len(sel_top) - len(sel_side))]
-            sel_top = np.concatenate([sel_top, extra])
-        chosen = np.concatenate([sel_top, sel_side])
+        # 3-way: top-down / side-45 / side-cap
+        az = np.abs(app_f[:, 2])
+        idx_top = np.where(az > 0.7)[0]
+        idx_s45 = np.where((az > 0.3) & (az <= 0.7))[0]
+        idx_cap = np.where(az <= 0.3)[0]
+        # bin 내부 균등 띄어놓기 기준 (각 bin 별로 다름)
+        opens = _open_dir_from_g(g_f, g_dim)
+        # top-down: open 방향 yaw (xy 평면 angle) 기준
+        yaw_top = np.arctan2(opens[:, 1], opens[:, 0])
+        # side: approach 의 horizontal azimuth (xy 평면) 기준 — 객체 둘레 한 바퀴
+        az_app = np.arctan2(app_f[:, 1], app_f[:, 0])
+        bin_keys = [
+            (idx_top, yaw_top),     # top: yaw 균등
+            (idx_s45, az_app),      # side-45: azimuth 균등
+            (idx_cap, az_app),      # cap: azimuth 균등
+        ]
+        bins = [(b, k) for (b, k) in bin_keys if len(b) > 0]
+        n_bin = len(bins)
+        per = n_keep // n_bin
+        rem = n_keep - per * n_bin
+        chosen = []
+        for k_idx, (b, key) in enumerate(bins):
+            need = per + (1 if k_idx < rem else 0)
+            if len(b) <= need:
+                chosen.append(b)
+            else:
+                order = np.argsort(key[b])           # angle 기준 정렬
+                chosen.append(b[_pick_evenly_spaced(order, need)])
+        chosen = np.concatenate(chosen)
+        if len(chosen) < n_keep:
+            rest = np.setdiff1d(np.arange(len(g_f)), chosen)
+            chosen = np.concatenate([chosen, rest[:n_keep - len(chosen)]])
+        return g_f[chosen[:n_keep]]
+
+    if mode == "lying" and len(g_f) > n_keep:
+        # 캔 자체의 PCA (scene_pts) 로 긴 축 추정 — grasp 분포 PCA 보다 정확
+        if scene_pts is not None and len(scene_pts) >= 50:
+            obj_ctr = scene_pts.mean(axis=0)
+            cov_o = np.cov((scene_pts - obj_ctr).T)
+            _, vecs_o = np.linalg.eigh(cov_o)
+            long_axis = vecs_o[:, -1]                # 큰 고유값 = 긴 축
+            ctr = obj_ctr
+        else:
+            ctr = pos_f.mean(axis=0)
+            cov = np.cov((pos_f - ctr).T)
+            _, vecs = np.linalg.eigh(cov)
+            long_axis = vecs[:, -1]
+        proj = (pos_f - ctr) @ long_axis             # (M,)
+        # 캔 표면 길이 [p_min, p_max] 를 N_keep 등분 anchor → 각 anchor 에 가장 가까운 grasp 픽
+        if scene_pts is not None and len(scene_pts) >= 50:
+            scene_proj = (scene_pts - ctr) @ long_axis
+            p_min = float(np.percentile(scene_proj, 5))
+            p_max = float(np.percentile(scene_proj, 95))
+        else:
+            p_min, p_max = float(proj.min()), float(proj.max())
+        anchors = np.linspace(p_min, p_max, n_keep)
+        chosen = []
+        used = set()
+        for a in anchors:
+            d = np.abs(proj - a)
+            for j in np.argsort(d):
+                if j not in used:
+                    chosen.append(j); used.add(j); break
+        return g_f[np.array(chosen, dtype=int)]
+
+    if mode == "cube" and len(g_f) > n_keep:
+        # yaw mod π/2 균등 spread (cube 4-fold 대칭)
+        opens = _open_dir_from_g(g_f, g_dim)
+        ang = np.arctan2(opens[:, 1], opens[:, 0])
+        ang_mod = np.mod(ang, math.pi / 2)
+        order = np.argsort(ang_mod)
+        chosen = _pick_evenly_spaced(order, n_keep)
         return g_f[chosen]
+
     return g_f[:n_keep]
 
 
@@ -291,12 +455,12 @@ def quat_to_app(q_wxyz):
 
 
 def mode_coverage(g_8d, gt_grasps_7d, gt_groups, pos_mean, pos_std,
-                  pos_th=POS_TH_M, ang_th=ANG_TH_DEG):
+                  pos_th=POS_TH_M, ang_th=ANG_TH_DEG, g_dim=8):
     """GT-side coverage: GT group 중 (pos<pos_th & ang<ang_th) pred 가 하나라도 있는 비율."""
     g = g_8d.copy()
     g[:, :3] = g[:, :3] * pos_std + pos_mean
     pos_p = g[:, :3]
-    app_p = g[:, 3:6] / (np.linalg.norm(g[:, 3:6], axis=1, keepdims=True) + 1e-9)
+    app_p = _approach_from_g(g, g_dim)
 
     pos_g = gt_grasps_7d[:, :3]
     app_g = np.array([quat_to_app(q) for q in gt_grasps_7d[:, 3:7]])
@@ -329,21 +493,34 @@ def main():
 
     fck = torch.load(args.flow_ckpt, weights_only=False, map_location=device)
     cfg_f = fck["cfg"]["args"]
+    flow_rot_repr = cfg_f.get("rot_repr", "approach_yaw")
+    flow_g_dim = 9 if flow_rot_repr == "zhou6d" else 8
     flow = FlowGraspNet(block_type=cfg_f["block"], n_blocks=cfg_f["n_blocks"],
-                        hidden=cfg_f["hidden"], cond_dropout=cfg_f["cond_dropout"]).to(device)
+                        hidden=cfg_f["hidden"], cond_dropout=cfg_f["cond_dropout"],
+                        g_dim=flow_g_dim).to(device)
     flow.load_state_dict(fck["ema"], strict=False); flow.eval()
     flow_norm = fck["norm_stats"]
-    print(f"[load] Flow ep={fck['epoch']} val={fck.get('val_loss'):.4f}")
+    print(f"[load] Flow ep={fck['epoch']} val={fck.get('val_loss'):.4f}  "
+          f"rot_repr={flow_rot_repr} g_dim={flow_g_dim}")
 
     dck = torch.load(args.direct_ckpt, weights_only=False, map_location=device)
     cfg_d = dck["cfg"]["args"]
+    direct_rot_repr = cfg_d.get("rot_repr", "approach_yaw")
+    direct_g_dim = 9 if direct_rot_repr == "zhou6d" else 8
     direct = DirectGraspNet(n_blocks=cfg_d["n_blocks"], hidden=cfg_d["hidden"],
                             cond_dropout=cfg_d.get("cond_dropout", 0.0)).to(device)
     direct.load_state_dict(dck["ema"], strict=False); direct.eval()
     direct_norm = dck["norm_stats"]
-    print(f"[load] Direct ep={dck['epoch']} val={dck.get('val_loss'):.4f}")
+    print(f"[load] Direct ep={dck['epoch']} val={dck.get('val_loss'):.4f}  "
+          f"rot_repr={direct_rot_repr} g_dim={direct_g_dim}")
 
-    fig = plt.figure(figsize=(13, 8.0), dpi=160)
+    fig = plt.figure(figsize=(15, 9.5), dpi=160)
+    plt.rcParams.update({
+        "font.size": 14,
+        "axes.titlesize": TITLE_FS,
+        "axes.labelsize": 14,
+        "font.family": "DejaVu Sans",
+    })
 
     with h5py.File(POSES_H5, "r") as p, h5py.File(DET_H5, "r") as d, \
          h5py.File(GRASP_H5, "r") as g:
@@ -370,7 +547,7 @@ def main():
             # Flow: oversample → distance filter → (standing) top-down/side balance
             g_flow_raw = infer_flow(flow, depth_m, uv, n=N_OVERSAMPLE,
                                     t_steps=T_EULER, temp=NOISE_TEMP,
-                                    w_cfg=CFG_W, seed=SEED)
+                                    w_cfg=CFG_W, seed=SEED, g_dim=flow_g_dim)
             label_lc = label.lower()
             if "standing" in label_lc:
                 f_mode = "standing"
@@ -388,6 +565,8 @@ def main():
                 dist_thresh_m=DIST_THRESH_BY_MODE[f_mode],
                 n_keep=N_SAMPLES,
                 mode=f_mode,
+                g_dim=flow_g_dim,
+                scene_pts=scene_pts,
             )
             n_raw = len(g_flow_raw); n_kept = len(g_flow)
             # GT grasp 가져와 mode coverage 계산
@@ -396,10 +575,12 @@ def main():
             gt_groups = np.asarray(g_gt_obj["grasp_group"])
             cov_flow, all_grps = mode_coverage(
                 g_flow, gt_grasps, gt_groups,
-                np.array(flow_norm["pos_mean"]), np.array(flow_norm["pos_std"]))
+                np.array(flow_norm["pos_mean"]), np.array(flow_norm["pos_std"]),
+                g_dim=flow_g_dim)
             cov_direct, _ = mode_coverage(
                 g_direct_n, gt_grasps, gt_groups,
-                np.array(direct_norm["pos_mean"]), np.array(direct_norm["pos_std"]))
+                np.array(direct_norm["pos_mean"]), np.array(direct_norm["pos_std"]),
+                g_dim=direct_g_dim)
             cov_pct_flow = 100.0 * len(cov_flow) / max(len(all_grps), 1)
             cov_pct_direct = 100.0 * len(cov_direct) / max(len(all_grps), 1)
             print(f"  [{label}] kept={n_kept}/{n_raw}  GT groups={all_grps}")
@@ -412,9 +593,9 @@ def main():
                    g_direct_n, grasp_color="#c0392b",
                    pos_mean=np.array(direct_norm["pos_mean"]),
                    pos_std=np.array(direct_norm["pos_std"]),
-                   elev=elev, azim=azim)
-            ax_top.set_title(f"Baseline (Direct MLP)\n{label}",
-                              fontsize=15, pad=4)
+                   elev=elev, azim=azim, g_dim=direct_g_dim)
+            ax_top.set_title(f"{label}\nBaseline (Direct MLP)",
+                              fontsize=TITLE_FS, pad=TITLE_PAD, fontweight='bold')
 
             # Bottom : Flow (Ours)
             ax_bot = fig.add_subplot(2, 3, 3 + col, projection="3d")
@@ -422,13 +603,12 @@ def main():
                    g_flow, grasp_color="#1976d2",
                    pos_mean=np.array(flow_norm["pos_mean"]),
                    pos_std=np.array(flow_norm["pos_std"]),
-                   elev=elev, azim=azim)
-            ax_bot.set_title(f"Ours (Flow Matching, N={n_kept}, "
-                              f"CFG={CFG_W:.1f})\n{label}",
-                              fontsize=15, pad=4)
+                   elev=elev, azim=azim, g_dim=flow_g_dim)
+            ax_bot.set_title(f"{label}\nOurs (Flow Matching, N={n_kept})",
+                              fontsize=TITLE_FS, pad=TITLE_PAD, fontweight='bold')
 
-    plt.subplots_adjust(left=0.0, right=1.0, top=0.965, bottom=0.0,
-                        wspace=0.0, hspace=0.05)
+    plt.subplots_adjust(left=0.0, right=1.0, top=0.94, bottom=0.0,
+                        wspace=0.05, hspace=0.12)
     out_png = OUT / "fig3_compare.png"
     out_pdf = OUT / "fig3_compare.pdf"
     plt.savefig(out_png, dpi=220, bbox_inches='tight', pad_inches=0.02)
