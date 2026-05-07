@@ -1,6 +1,6 @@
 ---
 name: yolo-grasp-orchestrator
-description: "YOLO_Grasp 프로젝트의 **6-DoF SE(3) Conditional Flow Matching grasp** 예측 모델 + IEEE 급 논문화 작업의 7인 에이전트 팀 오케스트레이터. 1280×720 카메라 프레임 전용. 데이터/YOLO/ICP/Grasp v4/Dataset v2 완료, **zhou_9d_full_250ep (9D Zhou, val 0.2419)** 가 최종 production 후보 (v7 8D 0.3676 대비 −34%), v7 deploy2 도 병존. **8D vs 9D + depth vs PC 두 ablation 완료**, Direct MLP baseline + Fig 1/2/3 + Table 1 완료. YOLO_Grasp · grasp 모델 · 파지자세 예측 · Simulink 데이터 파이프라인 · ONNX 배포 · **회전 표현 ablation (8D approach_yaw vs 9D Zhou) · 입력 표현 ablation (depth vs PC) · 논문 figure/table 생성 · 모델 architecture 업그레이드 (v8 cross-attn, v9 PC-only)** 작업 시 반드시 사용. 후속 작업(재실행, 부분 수정, threshold 조정, 재학습, 데이터 추가, 배포 재검증, 이전 결과 개선, 논문 그림 갱신, 메트릭 재계산, ONNX deploy3 export, Zhou19 인용)도 이 스킬을 사용."
+description: "YOLO_Grasp 프로젝트의 **6-DoF SE(3) Conditional Flow Matching grasp** 예측 모델 + **IEEE RA-L 8p 논문화 작업** (3주 일정, ieee-paper branch) 의 7인 에이전트 팀 오케스트레이터. 1280×720 카메라 프레임 전용. **zhou_9d_full_250ep (9D Zhou, val 0.2419)** 가 production. CFG=1.0 default (sweep 결과 GT 33% 근접). 사실 체크 12건 정정 완료 (9D stratified 재설계 / Stage 2 76× 과소 / RegionNormalizedGrasp NO LICENSE). YOLO_Grasp · grasp 모델 · 파지자세 예측 · Simulink 파이프라인 · ONNX 배포 · **8D vs 9D + depth vs PC ablation · 옵션 A~E 학습 트릭 (stratified noise · CFG interval · t-schedule · post-hoc EMA · Reflow) · GraspNet-1B Stage 2 fine-tune (1M subsample) · RegionNormalizedGrasp baseline · 논문 figure/table 생성** 작업 시 반드시 사용. 후속 작업 (재실행, 부분 수정, 재학습, 데이터 추가, paper figure 갱신, ONNX export, RA-L 진행, ieee-paper branch 작업) 도 이 스킬."
 ---
 
 # YOLO_Grasp Orchestrator — 7인 팀 조율 (모델 + 논문화)
@@ -24,29 +24,37 @@ description: "YOLO_Grasp 프로젝트의 **6-DoF SE(3) Conditional Flow Matching
 | Python | `/home/robotics/anaconda3/bin/python` (conda base) |
 | Cube 통합 | 하류에서 4종 → `cube` 1종 |
 
-## 📍 현재 진행 상황 (2026-04-27)
+## 📍 현재 진행 상황 (2026-05-07)
 
 | 단계 | 상태 | 산출물 |
 |---|---|---|
-| 1. 데이터 확보 | ✅ | `img_dataset/captured_images/` 588장 + depth |
-| 2. YOLO v3 학습 | ✅ | `runs/yolov8m_seg_v3_1280/weights/best.pt` (mask mAP50-95 0.982) |
-| 3. YOLO v3 재추론 | ✅ | `img_dataset/yolo_cache_v3/detections.h5` (3242 passed) |
-| 4. ICP v3 (mask_px p10 + fitness 0.30 + rmse 3mm) | ✅ | `img_dataset/icp_cache/poses.h5` (**2,485 stable**) |
-| 5. Grasp v4 합성 (3-layer + tilt + exclusion) | ✅ | `img_dataset/grasp_cache/grasps.h5` (**40,984 grasps**) |
-| 6. Dataset v2 통합 (cube 4→1, scene split) | ✅ | `datasets/grasp_v2.h5` (train 33,744 / val 7,240 rows) |
-| 7. Flow Matching 학습 v7_v4policy_big (8D, 배포 중) | ✅ | `runs/yolograsp_v2/v7_v4policy_big/.../best.pt` (ep226, val_flow=0.3676, 35.28M params) |
-| 8. ONNX export (encoder + velocity 분리) | ✅ | `deploy2/onnx/` (139MB velocity, round-trip 5.96e-06) |
-| 9. MATLAB YOLO ONNX | ✅ | `deploy2/yolo/yolov8m_seg_1280.onnx` |
-| 10. Viz / live ROS | ✅ | `deploy2/viz/{index.html,gt_policy/,icp/,live/}` |
-| 11. **Direct MLP baseline** (Ablation) | ✅ | `runs/yolograsp_v2/v7_direct_mlp_big/.../best.pt` (ep58, val_grasp=0.1118, 26M params) |
-| 12. **Paper figures + Table 1** | ✅ | `paper_figs/fig{1,2,3}_*.{png,pdf}` + `table1.{md,json}` |
-| 13. **8D vs 9D Zhou ablation** (50ep) | ✅ | val 0.3623 vs 0.2786 → **9D 채택 (−23%)** |
-| 14. **zhou_9d depth full 250ep** (NEW BEST) | ✅ | `runs/yolograsp_v2/zhou_9d_full_250ep/.../best.pt` (ep250, **val_flow=0.2419**, 14.8M params, 9D Zhou) |
-| 15. **PC-only 250ep** (Ablation) | ✅ | `runs/.../zhou_9d_pc_only_full_250ep/.../best.pt` (ep242, val=0.2748, depth 대비 −13.6% 열세) |
-| 16. **deploy3/4 시각화** | ✅ | `deploy3/viz/` (depth 250ep) + `deploy4/viz/` (PC 250ep) |
-| 17. **ONNX export → deploy3** (zhou_9d 9D) | ⏳ pending | 새 production candidate. Table 1/Fig 3 도 9D 모델로 갱신 예정 |
+| 1~16 데이터·YOLO·ICP·Grasp·Dataset·학습·ONNX·viz·Direct·Fig·8D/9D·PC ablation | ✅ | (이전 변경 이력 표 참조) |
+| 17. **zhou_9d depth full 250ep** (production 후보) | ✅ | `runs/.../zhou_9d_full_250ep/.../best.pt` (ep250, **val_flow=0.2419**, 14.8M, 9D Zhou) |
+| 18. **CFG sweep diagnostic + Fig 3 CFG=1.0 채택** | ✅ | `paper_figs/diag_cfg_sweep.{png,pdf}` (Fig 4 신설). CFG=0:78%/1:34%/2.5:22%/3.5:12% — **CFG=1.0 default** 결정 |
+| 19. **Fig 1/3 마진+gripper+title 갱신** | ✅ | gripper 80%/130%, title 22pt bold, 마진 0, scene PC s=4.5 |
+| 20. **venue RA-L 8p 결정 + ieee-paper branch + W0 skeleton** | ✅ | `ieee-paper` 843b2f6: 신규 11 파일 (sweep_t_schedule / posthoc_ema / reflow_data_gen / graspnet1b/{6} / eval_rngnet / zhou6d_to_graspgroup17) + demo_inference 수정 (stratified + cfg_at_t helper). 모두 NotImplementedError + TODO |
+| 21. **W0 P1 9D SO(3) stratified noise 실제 구현** | ⏳ pending | `scripts/demo_inference.py:sample_g0_stratified_9d` skeleton 만 — SO(3) prior 구현 필요 |
+| 22. **W0 Fig 1/3/Table 1 9D + CFG=1.0 + stratified 재생성** | ⏳ pending | |
+| 23. **W1 P3/P4 t-schedule 50ep × 4 + winner 250ep** | ⏳ pending | logit-normal/cosine/uniform/lognorm_neg |
+| 24. **W1 RegionNormalizedGrasp baseline** | ⏳ pending | CUDA Toolkit 설치 + monkey-patch (NO LICENSE → inference-only) |
+| 25. **W2 GraspNet-1B 다운 + Stage 2 fine-tune (1M subsample)** | ⏳ pending | **디스크 44GB 제약**: 외장 SSD 또는 subsample 권장 |
+| 26. **W2 P2 post-hoc EMA** | ⏳ pending | Karras 2024 |
+| 27. **W3 GraspNet 공식 AP eval + Reflow 1라운드** | ⏳ pending | |
+| 28. **W3 paper draft** | ⏳ pending | 8 page |
 
-**현재 초점**: zhou_9d_full_250ep (val 0.2419, 9D Zhou, depth) 가 **최종 production 후보**. v7 deploy2 대비 −34%. 다음: (1) ONNX export → deploy3, (2) Table 1 + Fig 3 9D 모델로 갱신, (3) 8D vs 9D + depth vs PC ablation 표 논문에 추가.
+**현재 초점 (2026-05-07~)**: RA-L 8p 3주 일정. Branch `ieee-paper` 위에 skeleton 11 파일 ready. **다음**: W0 P1 9D stratified 구현 → Fig/Table 9D 갱신 → W1 시작. **상세**: 메모리 `ral_8p_plan.md` (사실 체크 12건 정정 + 컴퓨팅 47h GPU/112h dev).
+
+## 사실 체크 결과 (2026-05-07, 3 병렬 Explore agent, 12건)
+
+🔴 Critical:
+1. 9D Zhou 의 stratified noise 는 8D 코드 그대로 못 씀 (g[5]=R[2,0] ≠ a_z) → SO(3) 직접 샘플
+2. Stage 2 fine-tune 76× 과소 추정 (실제 612h) → **1M subsample (~13h)**
+3. RegionNormalizedGrasp NO LICENSE + 640×360 internal + API 부재
+
+🟠 High: CFG interval [0.3,0.7] paper 미증명 / SD3 logit-normal image-only / Reflow FID 4.85=+distill
+🟡 Medium: snapshot 10~20 / t-sampling L357 만 / branch ieee-paper / PointNet2 nvcc / 함수명 정정 등
+
+상세: 메모리 `ral_8p_plan.md` § 사실 체크
 
 **핵심 ablation 결정 (2026-05-01~03)**:
 - **회전 표현**: 8D approach_yaw → **9D Zhou 6D** (−34%, Zhou19 CVPR 인용)

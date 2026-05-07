@@ -2,13 +2,16 @@
 
 Depth 이미지 + 픽셀 (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx,qy,qz]`를 **카메라 프레임**에서 생성하는 모델. **Conditional Rectified Flow (Flow Matching)** 기반으로 멀티 모달 분포 샘플링 (N=32~64). ONNX velocity MLP 만 export → MATLAB `predict_grasp.m`이 Euler step + 충돌 필터 + `CameraTform` 곱해 base frame pose 생성 → UR5e 파이프라인 연결. **즉시 응용**: RoboCup ARM 2026.
 
-## 연구 발전 방향 (IEEE 급 논문 목표)
+## 연구 발전 방향 (IEEE RA-L 8p, 3주 일정)
 
 **제목**: *Pixel-Conditioned Multi-Modal 6-DoF Grasp Pose Generation via Conditional Flow Matching*
+**Venue (2026-05-07 결정)**: **IEEE RA-L 8p** (rolling 투고, 3주 일정 가능)
+**3주 트랙**: ① 옵션 A~E 성능 향상 5종 모두 시도 ② GraspNet-1B Stage 2 fine-tune (1M subsample) + 공식 AP ③ RegionNormalizedGrasp baseline (TOGNet 코드 미공개 대체. NO LICENSE → inference-only)
+**Branch**: **`ieee-paper`** (origin 트래킹, 2026-05-07 신설) + main 병존
 **핵심 기여 (2개)**: ① 다수 객체 scene 의 픽셀 (u,v) 컨디셔닝 타겟 파지, ② Conditional Flow Matching 으로 멀티 모달 분포 직접 학습·샘플링.
-**Future work**: VLM 어텐션 → (u,v) → grasp 의 자연어 명령 기반 end-to-end manipulation.
+**Future work**: VLM 어텐션 → (u,v) → grasp.
 **GitHub**: https://github.com/seongbin1231/grasp_flow
-**상세 계획**: 메모리 `research_paper_plan.md` 참조.
+**상세 계획**: 메모리 `ral_8p_plan.md` (3주 일정 + 사실 체크 12건 + skeleton 상태) + `research_paper_plan.md`.
 
 ## 하네스: YOLO_Grasp Pipeline
 
@@ -31,6 +34,8 @@ Depth 이미지 + 픽셀 (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx
 | Grasp 표현 | **6-DoF SE(3) 7D `[x,y,z, qw,qx,qy,qz]`** (4-DoF `[x,y,z,yaw]` 폐기, 2026-04-19) |
 | 학습 회전 표현 | **9D Zhou 6D rotation** (3 pos + R[:,0:2] flatten 6) — `--rot_repr zhou6d` (2026-05-01 확정). 8D approach+yaw 대비 val_flow −34%. Zhou et al. CVPR 2019 인용 |
 | 최종 production 모델 | **zhou_9d_full_250ep** depth+uv → 9D Zhou, h768/nb8 14.8M, val_flow **0.2419** (v7 0.3676 대비 −34%) |
+| 추론 default CFG | **1.0** (이전 2.5 → CFG sweep 결과 GT 33% 에 가장 근접. 2026-05-04). higher CFG (2.5+) 는 standing top-down 모드 collapse 발생 |
+| Working branch | **`ieee-paper`** (RA-L 8p, 2026-05-07~) — main 은 안정 버전 유지 |
 
 ## Grasp 정책 v4 (2026-04-22 최종, 6dof-v4)
 
@@ -118,3 +123,6 @@ Depth 이미지 + 픽셀 (u,v) 입력으로 **6-DoF SE(3) grasp** `[x,y,z, qw,qx
 | 2026-05-01 | **zhou_9d PC-only full 250ep 학습** | scripts/run_pc_full_250ep.sh, runs/yolograsp_v2/zhou_9d_pc_only_full_250ep/.../best.pt | h768/nb8 19.5M, 9시간. **best ep242 val_flow=0.2748** (60ep 0.3078 대비 −10.7%). 모드별: lying 0.175 / standing 0.834 / cube 0.667. depth(0.2419) 와 −13.6% 격차 유지 → **PC 가 small-data + camera-fixed 환경에서 depth 보다 열세** 정량 결론 |
 | 2026-05-01 | **deploy3/viz + deploy4/viz 시각화** | deploy3/viz/ (depth 250ep), deploy4/viz/ (PC 250ep) | 7 카테고리 × 2 scene HTML. depth 437/448 kept (97.5%), PC 420/448 kept (93.8%). standing 모드에서 depth 우세 명확, lying은 거의 동등, lying_marker scene2 에서 PC 가 4.5cm → 2.1cm 개선 (예외) |
 | 2026-05-03 | **논문 Zhou19 대표 인용 결정** | (paper) | "On the Continuity of Rotation Representations in Neural Networks", Zhou et al. CVPR 2019 (arXiv 1812.07035, 3000+ 인용). 회전 표현 ablation 의 1순위 인용. 보조: Diffusion Policy (Chi RSS 2023), GraspGen (2025) |
+| 2026-05-04 | **CFG sweep diagnostic + Fig 3 CFG=1.0 채택** | scripts/diag_cfg_sweep_v9.py, paper_figs/diag_cfg_sweep.{png,pdf}, paper_figs/fig3_compare.{png,pdf} | 9D Zhou production 모델 standing can 케이스 CFG ∈ {0,1,1.5,2,2.5,3.5} × N=32 측정. **CFG=0:78%, CFG=1.0:34%, CFG=2.5:22%, CFG=3.5:12%**. GT 33% 에 가장 근접한 **CFG=1.0** 을 default 로 채택. Fig 3 재생성 (gripper 65→130%, scene PC s=4.5/alpha=0.45, title 22pt bold, 마진 0). 본 발견은 진단 #4 (CFG sharpening minor mode 억제) 9D 정량 확정 |
+| 2026-05-07 | **venue RA-L 8p 결정 + ieee-paper branch 신설** | 메모리 ral_8p_plan.md, ieee-paper branch 843b2f6 | 3주 일정 (W0~W3), 옵션 A~E 5종 모두 시도, GraspNet Stage 2 fine-tune (1M subsample, 디스크 44GB 제약), RegionNormalizedGrasp baseline (TOGNet 대체, NO LICENSE → inference-only), ACRONYM cut. 3 병렬 Explore agent 사실 체크 12건 정정 (critical 3: 9D stratified 재설계 / Stage 2 76× 과소 / RegionNormalized 라이선스 + 640×360 + API 부재) |
+| 2026-05-07 | **Skeleton 11 파일 ieee-paper push** | ieee-paper 843b2f6 | sweep_t_schedule.py / posthoc_ema.py / reflow_data_gen.py / graspnet1b/{6} / baselines/eval_rngnet.py / baselines/zhou6d_to_graspgroup17.py / demo_inference.py 수정 (sample_g0_stratified_8d/9d + cfg_at_t() + env trigger). 모두 NotImplementedError + TODO + 사실 체크 주석 |

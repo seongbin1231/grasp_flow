@@ -5,16 +5,17 @@ description: "IEEE 급 논문용 figure (Fig 1 mode-wise GT, Fig 2 architecture,
 
 # Paper Figure Generation
 
-논문 figure / table 4 종을 일관된 디자인 규칙으로 생성·갱신.
+논문 figure / table 5 종을 일관된 디자인 규칙으로 생성·갱신.
 
-## Quick reference — 산출물 4 종
+## Quick reference — 산출물 5 종 (2026-05-07 갱신, Fig 4 신설)
 
 | ID | 산출 | 스크립트 | 핵심 파라미터 |
 |---|---|---|---|
-| Fig 1 | `paper_figs/fig1_gt_synthesis.{png,pdf}` | `scripts/make_paper_fig1_gt.py` | CASES (sid/obj_idx), elev/azim, gripper scale 0.65 |
-| Fig 2 | `paper_figs/fig2_architecture.{png,pdf}` | `scripts/make_paper_fig2_arch.py` | 박스 색·폰트, 16:4 wide |
-| Fig 3 | `paper_figs/fig3_compare.{png,pdf}` | `scripts/make_paper_fig3_compare.py` | N_SAMPLES, CFG_W, DIST_THRESH_BY_MODE, SEED |
-| Table 1 | `paper_figs/table1.{md,json}` | `scripts/make_paper_table1.py` | POS_TH_M=0.05, ANG_TH_DEG=30, CFG_W=2.5, max_objs |
+| Fig 1 | `paper_figs/fig1_gt_synthesis.{png,pdf}` | `scripts/make_paper_fig1_gt.py` | CASES, elev/azim, **gripper 0.80**, title 22pt bold, **figsize 13×4.5**, 마진 0 |
+| Fig 2 | `paper_figs/fig2_architecture.{png,pdf}` | Paper Banana (외부) — 한·영 프롬프트 메모리 참조 | 9D depth + single local crop, 옅은 파스텔, navy 강조 X |
+| Fig 3 | `paper_figs/fig3_compare.{png,pdf}` | `scripts/make_paper_fig3_compare.py` | N_SAMPLES=16, **CFG_W=1.0** (sweep 결과 GT 33% 에 가장 근접), **gripper 1.30**, scene PC s=4.5/alpha=0.45, mode-balanced spread |
+| **Fig 4 신설** | `paper_figs/diag_cfg_sweep.{png,pdf}` | `scripts/diag_cfg_sweep_v9.py` | 9D Zhou × standing can × CFG ∈ {0,1,1.5,2,2.5,3.5} × N=32, mode-color (top/s45/cap) |
+| Table 1 | `paper_figs/table1.{md,json}` | `scripts/make_paper_table1.py` | POS_TH_M=0.05, ANG_TH_DEG=30, **CFG_W=1.0**, ckpt=`zhou_9d_full_250ep` |
 
 ## 공통 환경 상수
 
@@ -56,13 +57,18 @@ description: "IEEE 급 논문용 figure (Fig 1 mode-wise GT, Fig 2 architecture,
 
 ```python
 N_SAMPLES = 16
-N_OVERSAMPLE = 48          # filter+balance 위해 우선 많이 뽑음
+N_OVERSAMPLE = 128         # mode-balanced spread 위해 풍부히 (이전 48)
 T_EULER = 32
 NOISE_TEMP = 0.8
-CFG_W = 2.5                # 3.5 는 outlier 다수
+CFG_W = 1.0                # 2026-05-04 변경: CFG sweep 결과 GT 33% 에 가장 근접 (이전 2.5)
 DIRECT_UV_JITTER_PX = 2.0  # Direct N 샘플용
 DIST_THRESH_BY_MODE = {"standing": 0.10, "lying": 0.07, "cube": 0.06, "default": 0.10}
 SEED = 7
+# Gripper / scene PC 시각 파라미터 (2026-05-07 갱신)
+GRIPPER_SCALE = 1.30       # gripper 130% (이전 0.65, 잘 보이게)
+SCENE_S = 4.5              # scatter size (이전 1.8)
+SCENE_ALPHA = 0.45         # scatter alpha (이전 0.30)
+TITLE_FS = 22              # title font (bold), 옆 panel 침범 회피
 
 # CASES — seen 씬 사용
 ("Standing can",  "sample_random4_56", 0, "greenCan.ply",   -15, 205),
