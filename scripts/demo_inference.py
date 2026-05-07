@@ -169,6 +169,52 @@ def poly_to_mask(poly):
     return m.astype(bool)
 
 
+# =============================================================================
+# SKELETON: Stratified noise samplers + CFG interval helpers (W0 P1 + A3)
+# 사실 체크 (2026-05-07): /home/robotics/.claude/plans/sleepy-squishing-naur.md
+# =============================================================================
+
+def sample_g0_stratified_8d(n: int, temp: float, device) -> torch.Tensor:
+    """8D approach_yaw stratified noise.
+
+    절반은 top-down prior (a_z 큰 값 강제), 절반은 side prior.
+    메모리 standing_mode_collapse_diagnosis.md L66-78 1순위 처방 그대로.
+    """
+    n_top = n // 2
+    g_top = torch.randn(n_top, 8, device=device) * temp
+    g_top[:, 5] = torch.sign(torch.randn(n_top, device=device)) * (1.5 + 0.3 * torch.randn(n_top, device=device))
+    g_side = torch.randn(n - n_top, 8, device=device) * temp
+    g_side[:, 5] *= 0.3   # a_z 작게
+    return torch.cat([g_top, g_side], dim=0)
+
+
+def sample_g0_stratified_9d(n: int, temp: float, device) -> torch.Tensor:
+    """9D Zhou stratified noise — SO(3) 에서 직접 샘플.
+
+    ⚠️ TODO: 8D 의 g[:,5]=a_z 직접 채널 사용 X. 9D Zhou 에서 g[:,5]=R[2,0] 으로 무관.
+    → SO(3) 에서 R_top 샘플 후 r6 = [R[:,0], R[:,1]] 평탄화.
+
+    구현 절차:
+      1. n_top 개: 작은 perturbation 으로 R_top ≈ I (identity, +Z=approach=top-down)
+      2. n_side 개: R_side = Rx(90°) · I (또는 Ry(90°)) → +Z=approach 가 horizontal
+      3. axis-angle (small angle) 또는 quaternion → R 생성, r6 평탄화
+      4. pos = randn(n,3) * temp 그대로
+    """
+    raise NotImplementedError(
+        "TODO (W0 P1): SO(3) sampling 구현. 메모리 1순위 처방 + 9D 호환 재설계. ~30 LoC. "
+        "참조: /home/robotics/.claude/plans/sleepy-squishing-naur.md §사실체크 #1"
+    )
+
+
+def cfg_at_t(t_val: float, t_lo: float, t_hi: float) -> bool:
+    """t ∈ [t_lo, t_hi] 일 때만 CFG 적용 (Kynkäänniemi NeurIPS 2024 inspired).
+
+    ⚠️ Fact-check: paper 는 σ-interval 만 사용. t∈[0,1] 매핑은 우리 도메인 추측.
+    sweep 권장: {[0.2,0.8], [0.3,0.7], [0.4,0.6]}
+    """
+    return t_lo <= t_val <= t_hi
+
+
 @torch.no_grad()
 def flow_sample(depth_np, uv_np, n=N_SAMPLES, steps=N_EULER_STEPS,
                 guidance=GUIDANCE_SCALE):
@@ -206,29 +252,50 @@ def flow_sample(depth_np, uv_np, n=N_SAMPLES, steps=N_EULER_STEPS,
     uv_norm = torch.stack([uv_b[:, 0] / IMG_W, uv_b[:, 1] / IMG_H], dim=-1)
 
     from src.flow_model import sinusoidal_time_embed
-    g_t = torch.randn(n, G_DIM, device=device) * NOISE_TEMP
+
+    # =========================================================================
+    # SKELETON: 9D-호환 Stratified Noise (P1) + CFG guidance interval (A3)
+    # 사실 체크 후 정정 (2026-05-07):
+    #   8D 의 g[5]=a_z 직접 채널 사용 불가. 9D Zhou 에서 g[5]=R[2,0] (무관).
+    #   → SO(3) 에서 R_top 직접 샘플 후 9D r6 평탄화 (~30 LoC, /home/robotics/.claude/plans/sleepy-squishing-naur.md W0 P1)
+    # 환경 변수 트리거:
+    #   YGRASP_STRATIFIED=1 → top-prior + side-prior 절반씩
+    #   YGRASP_CFG_LO, YGRASP_CFG_HI → t ∈ [LO, HI] 일 때만 CFG 적용 (Kynkäänniemi 2024)
+    # =========================================================================
+    USE_STRATIFIED = os.environ.get("YGRASP_STRATIFIED", "0") == "1"
+    CFG_T_LO = float(os.environ.get("YGRASP_CFG_LO", 0.0))
+    CFG_T_HI = float(os.environ.get("YGRASP_CFG_HI", 1.0))
+
+    if USE_STRATIFIED and G_DIM == 9:
+        g_t = sample_g0_stratified_9d(n, NOISE_TEMP, device)         # TODO
+    elif USE_STRATIFIED and G_DIM == 8:
+        g_t = sample_g0_stratified_8d(n, NOISE_TEMP, device)         # 메모리 1순위 그대로
+    else:
+        g_t = torch.randn(n, G_DIM, device=device) * NOISE_TEMP
     dt = 1.0 / steps
     for k in range(steps):
         t_val = k * dt
         t_b = torch.full((n,), t_val, device=device)
         t_emb = sinusoidal_time_embed(t_b, dim=64)
+        # CFG guidance interval: t ∉ [LO, HI] 면 cond only (1× MLP call)
+        eff_guidance = guidance if cfg_at_t(t_val, CFG_T_LO, CFG_T_HI) else 1.0
         if use_xattn:
             tokens_on = model._build_cond_tokens(g_feat_b, l_feats_b, t_emb, uv_norm)
             tokens_off = torch.zeros_like(tokens_on)
             v_cond = model.velocity(g_t, cond_on_b, t_emb, uv_norm, cond_tokens=tokens_on)
-            if abs(guidance - 1.0) < 1e-6:
+            if abs(eff_guidance - 1.0) < 1e-6:
                 v = v_cond
             else:
                 v_uncond = model.velocity(g_t, cond_off_b, t_emb, uv_norm,
                                            cond_tokens=tokens_off)
-                v = v_uncond + guidance * (v_cond - v_uncond)
+                v = v_uncond + eff_guidance * (v_cond - v_uncond)
         else:
             v_cond = model.velocity(g_t, cond_on_b, t_emb, uv_norm)
-            if abs(guidance - 1.0) < 1e-6:
+            if abs(eff_guidance - 1.0) < 1e-6:
                 v = v_cond
             else:
                 v_uncond = model.velocity(g_t, cond_off_b, t_emb, uv_norm)
-                v = v_uncond + guidance * (v_cond - v_uncond)
+                v = v_uncond + eff_guidance * (v_cond - v_uncond)
         g_t = g_t + v * dt
 
     g_1 = g_t.cpu().numpy()
