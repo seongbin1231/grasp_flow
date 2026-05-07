@@ -36,9 +36,9 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 K_FX = K_FY = 1109.0
 K_CX, K_CY = 640.0, 360.0
-GRIPPER_HALF = 0.0425 * 0.65
-FINGER_LEN = 0.040 * 0.65
-PALM_BACK = 0.025 * 0.65
+GRIPPER_HALF = 0.0425 * 1.30
+FINGER_LEN = 0.040 * 1.30
+PALM_BACK = 0.025 * 1.30
 
 FLOW_CKPT = ROOT / "runs/yolograsp_v2/zhou_9d_full_250ep/adaln_zero_lr0.001_nb8_h768/checkpoints/best.pt"
 DIRECT_CKPT = ROOT / "runs/yolograsp_v2/v7_direct_mlp_big/direct_mlp_lr0.001_nb12_h1024/checkpoints/best.pt"
@@ -65,8 +65,8 @@ DIST_THRESH_BY_MODE = {   # 객체 중심에서 멀리 벗어난 grasp 제거 (m
 SEED = 7                  # 재현성
 
 # Typography (paper readable size)
-TITLE_FS = 22             # subplot title (was 15)
-TITLE_PAD = 8
+TITLE_FS = 22             # subplot title (was 15→22→26→22; 옆 panel 침범 회피)
+TITLE_PAD = 4
 
 
 def parse_args():
@@ -220,11 +220,11 @@ def render(ax, scene_pts, scene_rgb, ply_pts, R_obj, t_obj,
     ax.computed_zorder = False     # 수동 zorder 적용
     if len(scene_pts) > 0:
         ax.scatter(scene_pts[:, 0], scene_pts[:, 1], scene_pts[:, 2],
-                   s=1.8, c=scene_rgb, alpha=0.30, edgecolors='none',
+                   s=4.5, c=scene_rgb, alpha=0.45, edgecolors='none',
                    depthshade=False, zorder=1)
     if len(obj_pts) > 0:
         ax.scatter(obj_pts[:, 0], obj_pts[:, 1], obj_pts[:, 2],
-                   s=0.6, c='#bdbdbd', alpha=0.12, edgecolors='none',
+                   s=1.5, c='#bdbdbd', alpha=0.15, edgecolors='none',
                    depthshade=False, zorder=2)
 
     grasp_pts_all = []
@@ -594,7 +594,7 @@ def main():
                    pos_mean=np.array(direct_norm["pos_mean"]),
                    pos_std=np.array(direct_norm["pos_std"]),
                    elev=elev, azim=azim, g_dim=direct_g_dim)
-            ax_top.set_title(f"{label}\nBaseline (Direct MLP)",
+            ax_top.set_title(f"{label} — Direct MLP",
                               fontsize=TITLE_FS, pad=TITLE_PAD, fontweight='bold')
 
             # Bottom : Flow (Ours)
@@ -604,15 +604,15 @@ def main():
                    pos_mean=np.array(flow_norm["pos_mean"]),
                    pos_std=np.array(flow_norm["pos_std"]),
                    elev=elev, azim=azim, g_dim=flow_g_dim)
-            ax_bot.set_title(f"{label}\nOurs (Flow Matching, N={n_kept})",
+            ax_bot.set_title(f"{label} — Ours (N={n_kept})",
                               fontsize=TITLE_FS, pad=TITLE_PAD, fontweight='bold')
 
-    plt.subplots_adjust(left=0.0, right=1.0, top=0.94, bottom=0.0,
-                        wspace=0.05, hspace=0.12)
+    plt.subplots_adjust(left=0.0, right=1.0, top=0.96, bottom=0.0,
+                        wspace=0.04, hspace=0.08)
     out_png = OUT / "fig3_compare.png"
     out_pdf = OUT / "fig3_compare.pdf"
-    plt.savefig(out_png, dpi=220, bbox_inches='tight', pad_inches=0.02)
-    plt.savefig(out_pdf, bbox_inches='tight', pad_inches=0.02)
+    plt.savefig(out_png, dpi=220, bbox_inches='tight', pad_inches=0.0)
+    plt.savefig(out_pdf, bbox_inches='tight', pad_inches=0.0)
     print(f"[fig3] {out_png}")
     print(f"[fig3] {out_pdf}")
 

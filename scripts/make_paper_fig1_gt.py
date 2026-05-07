@@ -27,19 +27,19 @@ K_FX = K_FY = 1109.0
 K_CX, K_CY = 640.0, 360.0
 IMG_H, IMG_W = 720, 1280
 
-GRIPPER_HALF = 0.0425 * 0.65
-FINGER_LEN = 0.040 * 0.65
-PALM_BACK = 0.025 * 0.65
+GRIPPER_HALF = 0.0425 * 0.80
+FINGER_LEN = 0.040 * 0.80
+PALM_BACK = 0.025 * 0.80
 
 # 선택 case (각 모드 대표) — 실제 존재하는 obj_idx 로 수정
 # 사용자 요청: 서있는 캔, 누워있는 캔, 큐브
 # (label, sid, obj_idx, cls, mode, elev, azim)
 CASES = [
-    ("Standing can\n(top-down 8 + side-45 8 + side-cap 8 = 24)",
+    ("Standing can (N=24)",
      "sample_random6_32", 0, "can", "standing", -15, 205),
-    ("Lying can\n(4 pos x 3 tilts x 180 sym = 24)",
+    ("Lying can (N=24)",
      "sample_random6_11", 0, "can", "lying", -15, 205),
-    ("Cube\n(edge-aligned 2 yaws)",
+    ("Cube (N=2)",
      "sample_random6_30", 7, "cube_red", "cube", -15, 205),
 ]
 
@@ -163,7 +163,7 @@ def render_panel(ax, sample_id, obj_idx, title, det_h5, grasps_h5, poses_h5,
     ax.set_box_aspect([1, 1, 1])
     ax.view_init(elev=elev, azim=azim, vertical_axis='y')
     ax.invert_yaxis()   # cam +Y(아래) → 화면 아래로
-    ax.set_title(title, fontsize=15, pad=4)
+    ax.set_title(title, fontsize=22, pad=2, fontweight='bold')
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
     ax.grid(False)
     # remove panes
@@ -173,19 +173,19 @@ def render_panel(ax, sample_id, obj_idx, title, det_h5, grasps_h5, poses_h5,
 
 
 def main():
-    fig = plt.figure(figsize=(13, 4.2), dpi=150)
+    fig = plt.figure(figsize=(13, 4.5), dpi=150)
     with h5py.File(GRASP_H5, "r") as g, h5py.File(POSES_H5, "r") as p, \
          h5py.File(DET_H5, "r") as d:
         for i, (label, sid, idx, cls, mode, elev, azim) in enumerate(CASES, 1):
             ax = fig.add_subplot(1, 3, i, projection="3d")
             render_panel(ax, sid, idx, label, d, g, p, elev=elev, azim=azim)
 
-    plt.subplots_adjust(left=0.0, right=1.0, top=0.92, bottom=0.0,
+    plt.subplots_adjust(left=0.0, right=1.0, top=0.93, bottom=0.0,
                         wspace=0.0)
     out_png = OUT / "fig1_gt_synthesis.png"
     out_pdf = OUT / "fig1_gt_synthesis.pdf"
-    plt.savefig(out_png, dpi=220, bbox_inches='tight', pad_inches=0.02)
-    plt.savefig(out_pdf, bbox_inches='tight', pad_inches=0.02)
+    plt.savefig(out_png, dpi=220, bbox_inches='tight', pad_inches=0.0)
+    plt.savefig(out_pdf, bbox_inches='tight', pad_inches=0.0)
     print(f"[fig1] {out_png}")
     print(f"[fig1] {out_pdf}")
 
